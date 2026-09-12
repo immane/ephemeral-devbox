@@ -67,7 +67,9 @@ connect_tailscale() {
   fi
 
   require_value TS_AUTHKEY
-  local -a up_args=(up --auth-key="$TS_AUTHKEY" --hostname=ephemeral-devbox)
+  # A previous failed `tailscale up` can leave non-default flags behind.
+  # This branch only runs while disconnected, so reset is safe and makes retries reliable.
+  local -a up_args=(up --reset --auth-key="$TS_AUTHKEY" --hostname=ephemeral-devbox)
   if [[ -n "${TS_TAGS:-}" ]]; then
     up_args+=(--advertise-tags="$TS_TAGS")
   fi

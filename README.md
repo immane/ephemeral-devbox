@@ -59,6 +59,8 @@ chmod +x bootstrap.sh reset-local.sh
 
 `bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, and OpenCode. It writes root-only code-server and OpenCode configurations, starts both services, and creates two persistent Tailscale Serve routes. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
 
+When Tailscale is disconnected, bootstrap uses `tailscale up --reset` before authenticating. This only clears stale local `tailscale up` flags left by a failed prior attempt; an already connected node is not re-registered.
+
 Before starting code-server, bootstrap restores the tracked editor settings and keybindings, then installs each extension listed in `config/code-server-extensions.txt`. Existing extensions are skipped. To add an extension, append its marketplace ID on a new line and rerun bootstrap.
 
 ## Secrets
