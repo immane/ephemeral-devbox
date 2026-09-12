@@ -1,4 +1,4 @@
 bind-addr: 127.0.0.1:8080
-auth: password
+auth: __CODE_SERVER_AUTH__
 password: __CODE_SERVER_PASSWORD__
 cert: false

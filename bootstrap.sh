@@ -84,9 +84,8 @@ install_code_server() {
 
 write_code_server_config() {
   CURRENT_STAGE="writing code-server configuration"
-  require_value CODE_SERVER_PASSWORD
   install -d -m 700 "$CODE_SERVER_CONFIG_DIR"
-  CODE_SERVER_PASSWORD="$CODE_SERVER_PASSWORD" python3 - "$PROJECT_DIR/config/code-server.yaml.template" "$CODE_SERVER_CONFIG_DIR/config.yaml" <<'PY'
+  CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-}" python3 - "$PROJECT_DIR/config/code-server.yaml.template" "$CODE_SERVER_CONFIG_DIR/config.yaml" <<'PY'
 import json
 import os
 import sys
@@ -96,10 +95,11 @@ template = Path(sys.argv[1]).read_text()
 password = os.environ["CODE_SERVER_PASSWORD"]
 if "\n" in password or "\r" in password:
     raise SystemExit("CODE_SERVER_PASSWORD must not contain a newline")
-if "__CODE_SERVER_PASSWORD__" not in template:
-    raise SystemExit("code-server template placeholder is missing")
+if "__CODE_SERVER_AUTH__" not in template or "__CODE_SERVER_PASSWORD__" not in template:
+    raise SystemExit("code-server template placeholders are missing")
 # JSON strings are valid YAML double-quoted scalars and preserve special characters safely.
-Path(sys.argv[2]).write_text(template.replace("__CODE_SERVER_PASSWORD__", json.dumps(password)))
+config = template.replace("__CODE_SERVER_AUTH__", "password" if password else "none")
+Path(sys.argv[2]).write_text(config.replace("__CODE_SERVER_PASSWORD__", json.dumps(password)))
 PY
   chmod 600 "$CODE_SERVER_CONFIG_DIR/config.yaml"
   restore_code_server_customizations

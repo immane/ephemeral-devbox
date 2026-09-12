@@ -81,7 +81,8 @@ export FIRECRAWL_API_KEY=''
 
 - `TS_AUTHKEY` is required only when the node is not already logged in to Tailscale.
 - `TS_TAGS` is optional. It is passed as `--advertise-tags` when set.
-- `CODE_SERVER_PASSWORD` and `OPENCODE_GO_KEY` are required.
+- `CODE_SERVER_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect code-server with its built-in password prompt.
+- `OPENCODE_GO_KEY` is required.
 - `OPENCODE_WEB_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect OpenCode Web with HTTP Basic Auth. `OPENCODE_WEB_USERNAME` defaults to `opencode`. When enabled, credentials are stored in a root-only environment file, never in the systemd unit.
 - `GIT_SSH_PRIVATE_KEY` is optional. When supplied and `/root/.ssh/id_ed25519` does not already exist, it is written with restrictive permissions. Existing keys are never overwritten.
 - `GIT_REPO` is optional. When it is set, the repository is cloned to `/root/workspace`; an existing checkout is left unchanged.
