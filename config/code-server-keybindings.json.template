@@ -1,0 +1,8 @@
+// Place your key bindings in this file to override the defaults
+[
+  {
+    "key": "cmd+c",
+    "command": "-extension.vim_cmd+c",
+    "when": "editorTextFocus && vim.active && vim.overrideCopy && vim.use<D-c> && !inDebugRepl"
+  }
+]

@@ -1,0 +1,4 @@
+# One code-server extension ID per line.
+hidenobunagai.opencode-go-provider
+pkief.material-icon-theme
+vscodevim.vim

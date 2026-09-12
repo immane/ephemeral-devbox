@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenCode Web
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/workspace
+EnvironmentFile=-/root/.config/opencode/web.env
+ExecStart=__OPENCODE_BINARY__ web --hostname 127.0.0.1 --port 4096
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
