@@ -121,12 +121,12 @@ Use an SSH key, ACLs, and Tailscale SSH according to your tailnet policy. This p
 ## Destroy And Recreate
 
 1. Commit and push all work from `/root/workspace`.
-2. If you need to immediately free the MagicDNS hostname, run `sudo tailscale logout` before deleting the ECS.
+2. Before releasing the ECS, run `sudo tailscale logout`. For an ephemeral node this immediately removes it from the tailnet and frees the `ephemeral-devbox` MagicDNS hostname, so the next instance does not become `ephemeral-devbox-1`.
 3. Delete the ECS instance and any ephemeral disk you no longer need.
 4. Create a new Ubuntu ECS when needed.
 5. Repeat the bootstrap procedure with the same safely stored secrets.
 
-Do not retain a custom image or a large snapshot. The ephemeral Tailscale node is removed automatically after the machine disappears, subject to Tailscale's normal cleanup timing.
+Do not retain a custom image or a large snapshot. If you skip `tailscale logout`, the old ephemeral node is only removed after it goes offline, subject to Tailscale's normal cleanup timing; a stale `ephemeral-devbox` entry can force the replacement to use a suffixed hostname. A normal reboot does not need logout: the same ECS keeps its local Tailscale state and reconnects automatically.
 
 ## Local Reset Testing
 
