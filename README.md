@@ -14,6 +14,8 @@ Tailnet device
 
 Both web services bind only to loopback. Tailscale Serve publishes them only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 4096, or 8443 to the public internet.
 
+After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes only Tailscale, code-server, OpenCode, GitHub, and npm domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers.
+
 The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed.
 
 ## Persistent Data
@@ -134,7 +136,7 @@ sudo ./reset-local.sh
 sudo ./reset-local.sh --force
 ```
 
-It stops code-server and OpenCode Web, clears their generated configuration and code-server user data (including installed extensions), removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
+It stops code-server and OpenCode Web, clears their generated configuration and code-server user data (including installed extensions), removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
 
 ## Troubleshooting
 
