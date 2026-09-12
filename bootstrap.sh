@@ -101,7 +101,11 @@ if "__CODE_SERVER_AUTH__" not in template or "__CODE_SERVER_PASSWORD__" not in t
     raise SystemExit("code-server template placeholders are missing")
 # JSON strings are valid YAML double-quoted scalars and preserve special characters safely.
 config = template.replace("__CODE_SERVER_AUTH__", "password" if password else "none")
-Path(sys.argv[2]).write_text(config.replace("__CODE_SERVER_PASSWORD__", json.dumps(password)))
+if password:
+    config = config.replace("__CODE_SERVER_PASSWORD__", json.dumps(password))
+else:
+    config = config.replace("password: __CODE_SERVER_PASSWORD__\n", "")
+Path(sys.argv[2]).write_text(config)
 PY
   chmod 600 "$CODE_SERVER_CONFIG_DIR/config.yaml"
   restore_code_server_customizations
