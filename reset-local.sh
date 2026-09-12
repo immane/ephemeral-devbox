@@ -36,7 +36,9 @@ fi
 log 'Removing generated configuration and code-server user data...'
 rm -rf /root/.config/code-server /root/.config/opencode /root/.local/share/code-server
 rm -f /etc/systemd/system/opencode-web.service
+rm -f /etc/systemd/resolved.conf.d/90-ephemeral-devbox.conf
 systemctl daemon-reload
+systemctl restart systemd-resolved 2>/dev/null || true
 
 if [[ -e "$WORKSPACE" ]]; then
   log "Removing $WORKSPACE..."

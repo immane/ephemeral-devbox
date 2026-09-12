@@ -14,6 +14,8 @@ Tailnet device
 
 Both web services bind only to loopback. Tailscale Serve publishes them only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 4096, or 8443 to the public internet.
 
+At the start of bootstrap, a `systemd-resolved` drop-in configures Alibaba DNS (`223.5.5.5`, `223.6.6.6`) with Cloudflare, Google, and Quad9 fallbacks. `Domains=~.` makes these resolvers the default for general DNS queries. This is installed at `/etc/systemd/resolved.conf.d/90-ephemeral-devbox.conf` rather than overwriting `/etc/systemd/resolved.conf`; more-specific Tailscale MagicDNS routes continue to take precedence.
+
 The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed.
 
 ## Persistent Data
@@ -134,7 +136,7 @@ sudo ./reset-local.sh
 sudo ./reset-local.sh --force
 ```
 
-It stops code-server and OpenCode Web, clears their generated configuration and code-server user data (including installed extensions), removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
+It stops code-server and OpenCode Web, clears their generated configuration and code-server user data (including installed extensions), removes the ephemeral-devbox `systemd-resolved` drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
 
 ## Troubleshooting
 
