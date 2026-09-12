@@ -145,11 +145,11 @@ restore_code_server_customizations() {
 
 install_opencode() {
   CURRENT_STAGE="installing OpenCode"
+  # The official installer commonly uses this directory before a new login shell is opened.
+  export PATH="/root/.opencode/bin:$PATH"
   if ! command -v opencode >/dev/null 2>&1; then
     curl -fsSL https://opencode.ai/install | bash
   fi
-  # The official installer commonly uses this directory before a new login shell is opened.
-  export PATH="/root/.opencode/bin:$PATH"
   OPENCODE_BINARY="$(command -v opencode || true)"
   [[ -n "$OPENCODE_BINARY" ]] || fail 'OpenCode installation completed but opencode is not on PATH.'
   OPENCODE_BINARY="$(readlink -f "$OPENCODE_BINARY")"
