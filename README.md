@@ -16,7 +16,7 @@ Both web services bind only to loopback. Tailscale Serve publishes them only ins
 
 After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes only Tailscale, code-server, OpenCode, GitHub, and npm domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers.
 
-The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed.
+The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed. A normal reboot retains this ECS's local Tailscale state and reconnects automatically without registering a new node.
 
 ## Persistent Data
 
@@ -121,9 +121,10 @@ Use an SSH key, ACLs, and Tailscale SSH according to your tailnet policy. This p
 ## Destroy And Recreate
 
 1. Commit and push all work from `/root/workspace`.
-2. Delete the ECS instance and any ephemeral disk you no longer need.
-3. Create a new Ubuntu ECS when needed.
-4. Repeat the bootstrap procedure with the same safely stored secrets.
+2. If you need to immediately free the MagicDNS hostname, run `sudo tailscale logout` before deleting the ECS.
+3. Delete the ECS instance and any ephemeral disk you no longer need.
+4. Create a new Ubuntu ECS when needed.
+5. Repeat the bootstrap procedure with the same safely stored secrets.
 
 Do not retain a custom image or a large snapshot. The ephemeral Tailscale node is removed automatically after the machine disappears, subject to Tailscale's normal cleanup timing.
 
