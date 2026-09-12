@@ -5,7 +5,6 @@ set -Eeuo pipefail
 readonly PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly CODE_SERVER_CONFIG_DIR="/root/.config/code-server"
 readonly CODE_SERVER_USER_DIR="/root/.local/share/code-server/User"
-readonly RESOLVED_DROP_IN="/etc/systemd/resolved.conf.d/90-ephemeral-devbox.conf"
 readonly OPENCODE_CONFIG_DIR="/root/.config/opencode"
 readonly OPENCODE_WEB_ENV="/root/.config/opencode/web.env"
 readonly WORKSPACE="/root/workspace"
@@ -38,15 +37,6 @@ require_root_and_supported_os() {
 require_value() {
   local name=$1
   [[ -n "${!name:-}" ]] || fail "$name must be set before bootstrap runs."
-}
-
-configure_dns() {
-  CURRENT_STAGE="configuring system DNS"
-  install -d -m 755 /etc/systemd/resolved.conf.d
-  install -m 644 "$PROJECT_DIR/config/resolved.conf.template" "$RESOLVED_DROP_IN"
-  systemctl enable --now systemd-resolved
-  systemctl restart systemd-resolved
-  systemctl is-active --quiet systemd-resolved
 }
 
 install_packages() {
@@ -349,29 +339,27 @@ EOF
 
 main() {
   require_root_and_supported_os
-  log '[1/11] Configuring DNS'
-  configure_dns
-  log '[2/11] Installing packages'
+  log '[1/10] Installing packages'
   install_packages
-  log '[3/11] Installing Tailscale'
+  log '[2/10] Installing Tailscale'
   install_tailscale
-  log '[4/11] Connecting Tailscale'
+  log '[3/10] Connecting Tailscale'
   connect_tailscale
-  log '[5/11] Installing and configuring code-server'
+  log '[4/10] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[6/11] Installing OpenCode'
+  log '[5/10] Installing OpenCode'
   install_opencode
-  log '[7/11] Configuring OpenCode'
+  log '[6/10] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[8/11] Starting OpenCode Web'
+  log '[7/10] Starting OpenCode Web'
   write_opencode_service
-  log '[9/11] Configuring Tailscale Serve'
+  log '[8/10] Configuring Tailscale Serve'
   configure_tailscale_serve
-  log '[10/11] Configuring Git SSH'
+  log '[9/10] Configuring Git SSH'
   configure_git_ssh
-  log '[11/11] Preparing workspace and verifying services'
+  log '[10/10] Preparing workspace and verifying services'
   prepare_workspace
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
