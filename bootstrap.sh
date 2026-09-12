@@ -254,7 +254,7 @@ configure_tailscale_serve() {
 
 configure_git_ssh() {
   CURRENT_STAGE="configuring Git SSH"
-  [[ -n "${GIT_SSH_PRIVATE_KEY:-}" ]] || return
+  [[ -n "${GIT_SSH_PRIVATE_KEY:-}" ]] || return 0
   install -d -m 700 /root/.ssh
   if [[ ! -e /root/.ssh/id_ed25519 ]]; then
     (umask 077; printf '%s\n' "$GIT_SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519)
