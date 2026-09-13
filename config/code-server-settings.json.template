@@ -1,10 +1,9 @@
 {
-  "workbench.colorTheme": "Vira Deepforest High Contrast",
-  "workbench.iconTheme": "vira-icons-deepforest",
+  "workbench.colorTheme": "Tapetum Dichroic",
+  "workbench.iconTheme": "material-icon-theme",
   "editor.minimap.enabled": false,
   "window.menuBarVisibility": "classic",
   "window.commandCenter": false,
-  "workbench.productIconTheme": "viraUIIcons",
 
   /*
   "terminal.integrated.lineHeight": 1,

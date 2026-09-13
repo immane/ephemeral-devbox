@@ -3,4 +3,4 @@
 # it from the Microsoft Marketplace VSIX until it returns to OpenVSX.
 https://marketplace.visualstudio.com/_apis/public/gallery/publishers/HidenobuNagai/vsextensions/opencode-go-provider/latest/vspackage
 vscodevim.vim
-vira.vsc-vira-theme
+tuguidragos.tapetum
