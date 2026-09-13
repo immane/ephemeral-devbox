@@ -27,6 +27,7 @@ fi
 log 'Stopping local services...'
 systemctl disable --now code-server@root 2>/dev/null || true
 systemctl disable --now opencode-web 2>/dev/null || true
+systemctl disable --now opencode-go-relay 2>/dev/null || true
 
 if command -v tailscale >/dev/null 2>&1; then
   log 'Removing Tailscale Serve rules...'
@@ -34,8 +35,10 @@ if command -v tailscale >/dev/null 2>&1; then
 fi
 
 log 'Removing generated configuration and code-server user data...'
-rm -rf /root/.config/code-server /root/.config/opencode /root/.local/share/code-server
+rm -rf /root/.config/code-server /root/.config/opencode /root/.local/share/code-server /root/.grok
 rm -f /etc/systemd/system/opencode-web.service
+rm -f /etc/systemd/system/opencode-go-relay.service
+rm -f /usr/local/bin/opencode-go-relay.mjs
 rm -f /etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf
 systemctl daemon-reload
 systemctl restart systemd-resolved 2>/dev/null || true
@@ -48,6 +51,6 @@ fi
 cat <<'EOF'
 Local reset completed.
 
-Not removed: installed packages, Docker, Tailscale login/state, Tailscale account/auth keys,
+Not removed: installed apt packages, Docker, Tailscale login/state, Tailscale account/auth keys,
 SSH keys, remote Git repositories, ECS resources, cloud disks, or security groups.
 EOF

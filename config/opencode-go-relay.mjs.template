@@ -1,0 +1,99 @@
+import http from "node:http";
+import os from "node:os";
+import { Readable } from "node:stream";
+
+const PORT = 8787;
+const UPSTREAM = "https://opencode.ai/zen/go";
+const SESSION = process.env.OPENCODE_SESSION || `grok-${os.hostname()}`;
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const path = req.url.startsWith("/") ? req.url : `/${req.url}`;
+    const target = `${UPSTREAM}${path}`;
+
+    console.log(`${req.method} ${path} -> ${target}`);
+
+    const headers = new Headers();
+
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (!value) continue;
+
+      const k = key.toLowerCase();
+
+      if (
+        k === "host" ||
+        k === "content-length" ||
+        k === "connection" ||
+        k === "accept-encoding"
+      ) continue;
+
+      headers.set(
+        key,
+        Array.isArray(value) ? value.join(", ") : value
+      );
+    }
+
+    headers.set("accept-encoding", "identity");
+    headers.set("x-opencode-session", SESSION);
+    headers.set("user-agent", "grok-build-opencode-go-relay/1.0");
+
+    const chunks = [];
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+    }
+
+    const body = chunks.length
+      ? Buffer.concat(chunks)
+      : undefined;
+
+    const upstream = await fetch(target, {
+      method: req.method,
+      headers,
+      body,
+      redirect: "manual",
+    });
+
+    console.log(`Upstream status: ${upstream.status}`);
+
+    res.statusCode = upstream.status;
+
+    upstream.headers.forEach((value, key) => {
+      const k = key.toLowerCase();
+
+      if (
+        k === "content-encoding" ||
+        k === "content-length" ||
+        k === "transfer-encoding" ||
+        k === "connection"
+      ) {
+        return;
+      }
+
+      res.setHeader(key, value);
+    });
+
+    if (upstream.body) {
+      Readable.fromWeb(upstream.body).pipe(res);
+    } else {
+      res.end();
+    }
+  } catch (err) {
+    console.error(err);
+
+    res.writeHead(502, {
+      "content-type": "application/json",
+    });
+
+    res.end(JSON.stringify({
+      error: String(err),
+    }));
+  }
+});
+
+server.listen(PORT, "127.0.0.1", () => {
+  console.log(`Relay listening on http://127.0.0.1:${PORT}`);
+  console.log(`Session: ${SESSION}`);
+});

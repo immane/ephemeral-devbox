@@ -6,8 +6,11 @@ readonly PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly CODE_SERVER_CONFIG_DIR="/root/.config/code-server"
 readonly CODE_SERVER_USER_DIR="/root/.local/share/code-server/User"
 readonly EXTERNAL_DNS_DROP_IN="/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf"
+readonly GROK_CONFIG_DIR="/root/.grok"
 readonly OPENCODE_CONFIG_DIR="/root/.config/opencode"
 readonly OPENCODE_WEB_ENV="/root/.config/opencode/web.env"
+readonly RELAY_SCRIPT="/usr/local/bin/opencode-go-relay.mjs"
+readonly RELAY_SERVICE="/etc/systemd/system/opencode-go-relay.service"
 readonly WORKSPACE="/root/workspace"
 readonly OPENCODE_SERVICE="/etc/systemd/system/opencode-web.service"
 CURRENT_STAGE="startup"
@@ -40,11 +43,31 @@ require_value() {
   [[ -n "${!name:-}" ]] || fail "$name must be set before bootstrap runs."
 }
 
+load_secrets_env() {
+  CURRENT_STAGE="loading secrets"
+  local secrets_file="$PROJECT_DIR/secrets.env"
+  [[ -f "$secrets_file" ]] || {
+    log 'No secrets.env next to bootstrap.sh; using the inherited environment.'
+    return 0
+  }
+  local mode
+  mode=$(stat -c %a "$secrets_file" 2>/dev/null || printf '')
+  case "$mode" in
+    600|400|"") ;;
+    *) warn "$secrets_file has mode $mode; consider chmod 600 so other users cannot read it." ;;
+  esac
+  log "Loading secrets from $secrets_file (values in the file take precedence)."
+  set -a
+  # shellcheck disable=SC1090
+  . "$secrets_file"
+  set +a
+}
+
 install_packages() {
   CURRENT_STAGE="installing apt packages"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y curl git vim tmux jq ca-certificates openssh-client docker.io npm
+  apt-get install -y curl git vim tmux jq ca-certificates openssh-client docker.io npm nodejs
   systemctl enable --now docker
 }
 
@@ -397,6 +420,51 @@ PY
   systemctl is-active --quiet opencode-web
 }
 
+install_grok() {
+  CURRENT_STAGE="installing Grok Build"
+  # The x.ai installer targets $HOME/.grok/bin (i.e. /root/.grok/bin as root)
+  # and symlinks into /usr/local/bin when it is on PATH and writable.
+  export PATH="/root/.grok/bin:/root/.local/bin:/usr/local/bin:$PATH"
+  if ! command -v grok >/dev/null 2>&1; then
+    curl -fsSL https://x.ai/cli/install.sh | bash
+  fi
+  GROK_BINARY="$(command -v grok || true)"
+  [[ -n "$GROK_BINARY" ]] || fail 'Grok installation completed but grok is not on PATH.'
+  GROK_BINARY="$(readlink -f "$GROK_BINARY")"
+  export GROK_BINARY
+}
+
+write_grok_config() {
+  CURRENT_STAGE="writing Grok configuration"
+  require_value OPENCODE_GO_KEY
+  install -d -m 700 "$GROK_CONFIG_DIR"
+  OPENCODE_GO_KEY="$OPENCODE_GO_KEY" python3 - "$PROJECT_DIR/config/grok-config.toml.template" "$GROK_CONFIG_DIR/config.toml" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+template = Path(sys.argv[1]).read_text()
+key = os.environ["OPENCODE_GO_KEY"]
+if "\n" in key or "\r" in key:
+    raise SystemExit("OPENCODE_GO_KEY must not contain a newline")
+if "__OPENCODE_GO_KEY__" not in template:
+    raise SystemExit("Grok config template placeholder is missing")
+Path(sys.argv[2]).write_text(template.replace("__OPENCODE_GO_KEY__", key))
+PY
+  chmod 600 "$GROK_CONFIG_DIR/config.toml"
+}
+
+write_opencode_go_relay() {
+  CURRENT_STAGE="creating OpenCode Go relay service"
+  command -v node >/dev/null 2>&1 || fail 'node is required for opencode-go-relay but is not on PATH.'
+  install -m 755 "$PROJECT_DIR/config/opencode-go-relay.mjs.template" "$RELAY_SCRIPT"
+  node --check "$RELAY_SCRIPT"
+  install -m 644 "$PROJECT_DIR/config/opencode-go-relay.service.template" "$RELAY_SERVICE"
+  systemctl daemon-reload
+  systemctl enable --now opencode-go-relay
+  systemctl is-active --quiet opencode-go-relay
+}
+
 configure_tailscale_serve() {
   CURRENT_STAGE="configuring Tailscale Serve"
   # This machine owns Serve configuration exclusively, so reset avoids stale rules on reruns.
@@ -492,6 +560,9 @@ RUNNING
 OpenCode Web:
 RUNNING
 
+OpenCode Go Relay:
+RUNNING
+
 Workspace:
 $WORKSPACE
 
@@ -506,42 +577,48 @@ EOF
 }
 
 main() {
+  load_secrets_env
   require_root_and_supported_os
-  log '[1/11] Installing packages'
+  log '[1/12] Installing packages'
   install_packages
-  log '[2/11] Configuring external service DNS'
+  log '[2/12] Configuring external service DNS'
   configure_external_dns
-  log '[3/11] Installing Tailscale (binary only; connection deferred to the end)'
+  log '[3/12] Installing Tailscale (binary only; connection deferred to the end)'
   install_tailscale
-  log '[4/11] Installing and configuring code-server'
+  log '[4/12] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[5/11] Installing OpenCode'
+  log '[5/12] Installing OpenCode'
   install_opencode
-  log '[6/11] Configuring OpenCode'
+  log '[6/12] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[7/11] Starting OpenCode Web'
+  log '[7/12] Starting OpenCode Web'
   write_opencode_service
-  log '[8/11] Configuring Git SSH and preparing workspace'
+  log '[8/12] Installing Grok Build and starting OpenCode Go relay'
+  install_grok
+  write_grok_config
+  write_opencode_go_relay
+  log '[9/12] Configuring Git SSH and preparing workspace'
   configure_git_ssh
   prepare_workspace
   # Switch apt to public mirrors before connecting Tailscale: once connected,
   # Tailscale routes conflict with the Alibaba Cloud VPC intranet, dropping
   # intranet SSH and making the intranet apt mirror unreachable.
-  log '[9/11] Switching apt sources to Tsinghua mirrors'
+  log '[10/12] Switching apt sources to Tsinghua mirrors'
   switch_apt_to_tsinghua
   # Connect Tailscale as late as possible: once connected, Tailscale routes
   # conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH
   # session, so all intranet-dependent work above must finish first.
-  log '[10/11] Connecting Tailscale'
+  log '[11/12] Connecting Tailscale'
   connect_tailscale
-  log '[11/11] Configuring Tailscale Serve and verifying services'
+  log '[12/12] Configuring Tailscale Serve and verifying services'
   configure_tailscale_serve
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
   systemctl is-active --quiet code-server@root
   systemctl is-active --quiet opencode-web
+  systemctl is-active --quiet opencode-go-relay
   print_summary
 }
 

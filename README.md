@@ -14,7 +14,7 @@ Tailnet device
 
 Both web services bind only to loopback. Tailscale Serve publishes them only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 4096, or 8443 to the public internet.
 
-After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes Tailscale, code-server, OpenCode, GitHub, npm, Tsinghua mirror (`mirrors.tuna.tsinghua.edu.cn`), and Ubuntu security (`security.ubuntu.com`) domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers during the initial install.
+After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes Tailscale, code-server, OpenCode, xAI (`x.ai`, plus the installer fallback `storage.googleapis.com`), GitHub, npm, Tsinghua mirror (`mirrors.tuna.tsinghua.edu.cn`), and Ubuntu security (`security.ubuntu.com`) domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers during the initial install.
 
 The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed. A normal reboot retains this ECS's local Tailscale state and reconnects automatically without registering a new node.
 
@@ -49,9 +49,10 @@ git clone <PRIVATE_REPO>
 cd ephemeral-devbox
 cp secrets.env.example secrets.env
 vim secrets.env
-source secrets.env
 sudo -E ./bootstrap.sh
 ```
+
+`bootstrap.sh` automatically sources `secrets.env` from its own directory when the file exists, so there is no need to source it manually beforehand. Values in the file take precedence over the inherited environment. Keep the file root-readable-only (`chmod 600 secrets.env`); bootstrap warns if other users can read it.
 
 Make scripts executable after a fresh clone if Git did not preserve their mode:
 
@@ -59,7 +60,7 @@ Make scripts executable after a fresh clone if Git did not preserve their mode:
 chmod +x bootstrap.sh reset-local.sh
 ```
 
-`bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, and OpenCode. It writes root-only code-server and OpenCode configurations, starts both services, clones the workspace, then switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then connects Tailscale and creates two persistent Tailscale Serve routes. The mirror switch must happen before Tailscale connects because its routes conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH session while also making the intranet apt mirror unreachable; all intranet-dependent work (apt mirrors, Git SSH, workspace clone) finishes first. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Following the Tsinghua mirror guidance, normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
+`bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, OpenCode, and Grok Build. It writes root-only code-server and OpenCode configurations, starts both services, installs Grok Build with a relay-backed model pointing at a local OpenCode Go relay (`http://127.0.0.1:8787`, systemd service `opencode-go-relay`), clones the workspace, then switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then connects Tailscale and creates two persistent Tailscale Serve routes. The mirror switch must happen before Tailscale connects because its routes conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH session while also making the intranet apt mirror unreachable; all intranet-dependent work (apt mirrors, Git SSH, workspace clone) finishes first. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Following the Tsinghua mirror guidance, normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
 
 When Tailscale is disconnected, bootstrap uses `tailscale up --reset` before authenticating. This only clears stale local `tailscale up` flags left by a failed prior attempt; an already connected node is not re-registered.
 
@@ -86,13 +87,13 @@ export FIRECRAWL_API_KEY=''
 - `TS_AUTHKEY` is required only when the node is not already logged in to Tailscale.
 - `TS_TAGS` is optional. It is passed as `--advertise-tags` when set.
 - `CODE_SERVER_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect code-server with its built-in password prompt.
-- `OPENCODE_GO_KEY` is required.
+- `OPENCODE_GO_KEY` is required. It is also reused as the API key for the relay-backed model in the Grok configuration.
 - `OPENCODE_WEB_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect OpenCode Web with HTTP Basic Auth. `OPENCODE_WEB_USERNAME` defaults to `opencode`. When enabled, credentials are stored in a root-only environment file, never in the systemd unit.
 - `GIT_SSH_PRIVATE_KEY` is optional. When supplied and `/root/.ssh/id_ed25519` does not already exist, it is written with restrictive permissions. Existing keys are never overwritten.
 - `GIT_REPO` is optional. When it is set, the repository is cloned to `/root/workspace`; an existing checkout is left unchanged.
 - `GITHUB_PERSONAL_ACCESS_TOKEN`, `E2B_API_KEY`, and `FIRECRAWL_API_KEY` are optional credentials for the retained GitHub, E2B, and Firecrawl MCP servers.
 
-Secrets are never embedded in templates, systemd units, README examples, or script logs. OpenCode and MCP keys are stored only in `/root/.config/opencode/opencode.json` with mode `0600`; OpenCode Web credentials are stored in `/root/.config/opencode/web.env` with mode `0600`.
+Secrets are never embedded in templates, systemd units, README examples, or script logs. OpenCode and MCP keys are stored only in `/root/.config/opencode/opencode.json` with mode `0600`; OpenCode Web credentials are stored in `/root/.config/opencode/web.env` with mode `0600`; the Grok configuration (including the relay model key) is stored in `/root/.grok/config.toml` with mode `0600`.
 
 ## Access
 
@@ -137,7 +138,7 @@ sudo ./reset-local.sh
 sudo ./reset-local.sh --force
 ```
 
-It stops code-server and OpenCode Web, clears their generated configuration and code-server user data (including installed extensions), removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
+It stops code-server, OpenCode Web, and the OpenCode Go relay, clears their generated configuration and code-server user data (including installed extensions), removes the Grok configuration directory, the external DNS drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
 
 ## Troubleshooting
 
@@ -147,5 +148,7 @@ It stops code-server and OpenCode Web, clears their generated configuration and 
 | Serve URL does not work | Confirm MagicDNS/HTTPS access and run `tailscale serve status`. Check tailnet ACLs. |
 | code-server unavailable | Run `systemctl status code-server@root` and inspect `/root/.config/code-server/config.yaml` permissions. |
 | OpenCode Web unavailable | Run `systemctl status opencode-web`; `journalctl -u opencode-web -e` shows runtime errors without exposing config values. |
+| OpenCode Go relay unavailable | Run `systemctl status opencode-go-relay`; `journalctl -u opencode-go-relay -e` shows relay errors. Confirm node is installed and port 8787 is listening with `ss -ltnp | grep 8787`. |
+| Grok model call fails | Confirm the relay is running and `/root/.grok/config.toml` points at `http://127.0.0.1:8787/v1`. Test the relay directly with `curl http://127.0.0.1:8787/v1/models`. |
 | Git SSH clone fails | Confirm the private key can access the repository and that `ssh-keyscan` completed. Test `ssh -T git@github.com` or `ssh -T git@gitee.com`. |
 | Bootstrap refuses workspace | Move or remove the non-Git `/root/workspace` directory rather than allowing the script to overwrite files. |

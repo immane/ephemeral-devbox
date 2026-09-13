@@ -1,0 +1,28 @@
+[cli]
+installer = "internal"
+
+[marketplace]
+default_skills_installs_purged = true
+official_marketplace_auto_installed = true
+
+[[marketplace.sources]]
+name = "xAI Official"
+git = "https://github.com/xai-org/plugin-marketplace.git"
+
+[models]
+default = "deepseek-flash"
+
+[model.deepseek-flash]
+model = "deepseek-v4.1-flash"
+base_url = "http://127.0.0.1:8787/v1"
+name = "DeepSeek V4.1 Flash - OpenCode Go"
+api_key = "__OPENCODE_GO_KEY__"
+context_window = 1048576
+max_completion_tokens = 16384
+
+[ui]
+max_thoughts_width = 120
+fork_secondary_model = "grok-4.6"
+yolo = false
+compact_mode = false
+permission_mode = "ask"
