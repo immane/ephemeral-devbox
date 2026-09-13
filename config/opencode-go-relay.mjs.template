@@ -14,18 +14,17 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const UPSTREAM_TTFB_TIMEOUT_MS = 5 * 60 * 1000;
 
 const server = http.createServer(async (req, res) => {
-  // Loopback-only relay for long-lived SSE streams: Node's default 5-minute
-  // server request timeout would kill slow generations.
-  server.requestTimeout = 0;
   const controller = new AbortController();
-  const ttfb = setTimeout(() => controller.abort(new Error("upstream time-to-first-byte timeout")), UPSTREAM_TTFB_TIMEOUT_MS);
-  req.on("close", () => {
-    if (!res.writableEnded) controller.abort(new Error("client closed connection"));
+  let ttfb;
+  // `close` also fires after a request body is read normally. Only `aborted`
+  // means the peer disconnected before completing that request.
+  req.on("aborted", () => controller.abort(new Error("client aborted request")));
+  res.on("close", () => {
+    if (!res.writableEnded) controller.abort(new Error("client closed response"));
   });
   try {
     const declared = Number(req.headers["content-length"]);
     if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-      clearTimeout(ttfb);
       res.writeHead(413, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: `request body exceeds ${MAX_BODY_BYTES} bytes` }));
       return;
@@ -66,7 +65,6 @@ const server = http.createServer(async (req, res) => {
       for await (const chunk of req) {
         received += chunk.length;
         if (received > MAX_BODY_BYTES) {
-          clearTimeout(ttfb);
           res.writeHead(413, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: `request body exceeds ${MAX_BODY_BYTES} bytes` }));
           return;
@@ -79,6 +77,8 @@ const server = http.createServer(async (req, res) => {
       ? Buffer.concat(chunks)
       : undefined;
 
+    // Start the upstream budget only after the client has finished uploading.
+    ttfb = setTimeout(() => controller.abort(new Error("upstream time-to-first-byte timeout")), UPSTREAM_TTFB_TIMEOUT_MS);
     const upstream = await fetch(target, {
       method: req.method,
       headers,
@@ -126,6 +126,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Long SSE responses must not be cut off by Node's default request timeout.
+server.requestTimeout = 0;
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Relay listening on http://127.0.0.1:${PORT}`);
   console.log(`Session: ${SESSION}`);

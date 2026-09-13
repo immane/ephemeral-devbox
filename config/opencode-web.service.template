@@ -5,12 +5,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/workspace
-EnvironmentFile=-/root/.config/opencode/web.env
+User=devbox
+WorkingDirectory=__WORKSPACE__
+EnvironmentFile=-__OPENCODE_WEB_ENV__
 ExecStart=__OPENCODE_BINARY__ web --hostname 127.0.0.1 --port 4096
 Restart=on-failure
 RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/home/devbox
 
 [Install]
 WantedBy=multi-user.target

@@ -55,8 +55,12 @@ clone_or_update() {
     log "Updating existing checkout at $DEST"
     git -C "$DEST" remote set-url origin "$REPO_URL"
     git -C "$DEST" fetch origin
-    # checkout -f below would silently discard tracked local changes.
-    [[ -z "$(git -C "$DEST" status --porcelain --untracked-files=no)" ]] || fail "$DEST has tracked local changes; commit, stash, or discard them before updating."
+    # checkout -f below can discard tracked changes and untracked paths that
+    # collide with files from the selected ref. The ignored secrets.env is the
+    # only local file this loader deliberately permits.
+    local local_changes
+    local_changes="$(git -C "$DEST" status --porcelain --untracked-files=all --ignored=matching | grep -vE '^(\?\?|!!) secrets\.env$' || true)"
+    [[ -z "$local_changes" ]] || fail "$DEST has local changes other than secrets.env; commit, stash, or remove them before updating."
   else
     if [[ -e "$DEST" ]]; then
       [[ -d "$DEST" ]] || fail "$DEST exists and is not a directory; refusing to overwrite it."

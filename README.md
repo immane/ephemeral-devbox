@@ -2,6 +2,41 @@
 
 `ephemeral-devbox` bootstraps a disposable Ubuntu development machine for an Alibaba Cloud ECS spot instance. It uses scripts and Git as the durable source of truth rather than images, snapshots, a fixed public IP, or a fixed Tailscale IP.
 
+## Quickstart
+
+After providing secrets by either option below, this single command fetches the repository and runs bootstrap without a manual clone:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+```
+
+`remote-install.sh` installs git when missing, clones (or updates a clean checkout of) the repository to `/root/ephemeral-devbox`, checks out the ref, refuses to overwrite a non-Git directory or a checkout with local changes other than the ignored `secrets.env`, requires `secrets.env` (or an exported `OPENCODE_GO_KEY`), and then execs `bootstrap.sh`. Two ways to provide secrets (pick one):
+
+```bash
+# Option A: stage the file before cloning (it is kept across the clone, mode 600)
+mkdir -p /root/ephemeral-devbox
+scp secrets.env root@<host>:/root/ephemeral-devbox/secrets.env
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+
+# Option B: source locally-prepared values so the environment carries them
+source secrets.env
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+```
+
+Option B works because `bootstrap.sh` automatically sources `secrets.env` when present and otherwise falls back to the inherited environment (`sudo -E` preserves it).
+
+Pin a reviewed version for reproducibility instead of tracking `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/<tag-or-sha>/remote-install.sh | sudo -E bash
+export EPHEMERAL_DEVBOX_REF=<tag-or-sha>
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+```
+
+(The `export` must precede the pipeline: prefixing `curl` would scope the variable to `curl` only, not to the shell running the loader.)
+
+`EPHEMERAL_DEVBOX_REPO`, `EPHEMERAL_DEVBOX_REF` (branch, tag, or commit SHA), and `EPHEMERAL_DEVBOX_DIR` override the defaults. Piping to bash trusts that ref tip on first use; prefer a tag or SHA you have reviewed.
+
 ## Architecture
 
 ```
@@ -10,9 +45,13 @@ Tailnet device
     +-- HTTPS 443  -> Tailscale Serve -> 127.0.0.1:8080 -> code-server
     |
     +-- HTTPS 8443 -> Tailscale Serve -> 127.0.0.1:4096 -> OpenCode Web
+
+On the host itself (never exposed):
+
+grok CLI (devbox) -> 127.0.0.1:8787 -> OpenCode Go relay -> opencode.ai
 ```
 
-Both web services bind only to loopback. Tailscale Serve publishes them only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 4096, or 8443 to the public internet.
+Both web services bind only to loopback. Tailscale Serve publishes them only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 4096, 8443, or 8787 to the public internet.
 
 After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes Tailscale, code-server, OpenCode, xAI (`x.ai`, plus the installer fallback `storage.googleapis.com`), GitHub, npm, Tsinghua mirror (`mirrors.tuna.tsinghua.edu.cn`), and Ubuntu security (`security.ubuntu.com`) domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers during the initial install.
 
@@ -45,10 +84,12 @@ Tailscale Serve obtains a certificate for the node's tailnet DNS name. If this i
 Clone this repository on the new ECS, then create the ignored secrets file:
 
 ```bash
-git clone <PRIVATE_REPO>
+git clone https://github.com/immane/ephemeral-devbox.git
 cd ephemeral-devbox
 cp secrets.env.example secrets.env
 vim secrets.env
+sudo chown root:root secrets.env
+sudo chmod 600 secrets.env
 sudo -E ./bootstrap.sh
 ```
 
@@ -60,42 +101,7 @@ Make scripts executable after a fresh clone if Git did not preserve their mode:
 chmod +x bootstrap.sh reset-local.sh remote-install.sh
 ```
 
-## Remote Install Without Cloning
-
-On a fresh ECS, a single command fetches this repository and runs bootstrap without a manual clone:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
-```
-
-`remote-install.sh` installs git when missing, clones (or updates a clean checkout of) the repository to `/root/ephemeral-devbox`, checks out the ref, refuses to overwrite a non-Git directory or a checkout with tracked local changes, requires `secrets.env` (or an exported `OPENCODE_GO_KEY`), and then execs `bootstrap.sh`. Two ways to provide secrets (pick one):
-
-```bash
-# Option A: stage the file before cloning (it is kept across the clone, mode 600)
-mkdir -p /root/ephemeral-devbox
-scp secrets.env root@<host>:/root/ephemeral-devbox/secrets.env
-curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
-
-# Option B: source locally-prepared values so the environment carries them
-source secrets.env
-curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
-```
-
-Option B works because `bootstrap.sh` automatically sources `secrets.env` when present and otherwise falls back to the inherited environment (`sudo -E` preserves it).
-
-Pin a reviewed version for reproducibility instead of tracking `main`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/<tag-or-sha>/remote-install.sh | sudo -E bash
-export EPHEMERAL_DEVBOX_REF=<tag-or-sha>
-curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
-```
-
-(The `export` must precede the pipeline: prefixing `curl` would scope the variable to `curl` only, not to the shell running the loader.)
-
-`EPHEMERAL_DEVBOX_REPO`, `EPHEMERAL_DEVBOX_REF` (branch, tag, or commit SHA), and `EPHEMERAL_DEVBOX_DIR` override the defaults. Piping to bash trusts that ref tip on first use; prefer a tag or SHA you have reviewed.
-
-`bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, OpenCode, and Grok Build. It writes root-only code-server and OpenCode configurations, starts both services, installs Grok Build with a relay-backed model pointing at a local OpenCode Go relay (`http://127.0.0.1:8787`, systemd service `opencode-go-relay`), clones the workspace, then switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then connects Tailscale and creates two persistent Tailscale Serve routes. The mirror switch must happen before Tailscale connects because its routes conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH session while also making the intranet apt mirror unreachable; all intranet-dependent work (apt mirrors, Git SSH, workspace clone) finishes first. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Following the Tsinghua mirror guidance, normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
+`bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, OpenCode, and Grok Build. code-server, OpenCode Web, Grok Build, the relay, Git SSH credentials, and `/home/devbox/workspace` all run as the dedicated unprivileged `devbox` user. Grok uses a relay-backed model at `http://127.0.0.1:8787` (systemd service `opencode-go-relay`). Bootstrap stops any persisted Tailscale daemon before setup, clones the workspace, switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then starts and connects Tailscale. This preserves the Alibaba VPC connection until all intranet-dependent work finishes. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Ubuntu normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`; Debian uses Tsinghua's Debian and Debian security mirrors. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
 
 When Tailscale is disconnected, bootstrap uses `tailscale up --reset` before authenticating. This only clears stale local `tailscale up` flags left by a failed prior attempt; an already connected node is not re-registered.
 
@@ -117,20 +123,27 @@ export GIT_REPO='git@gitee.com:organization/project.git'
 export GITHUB_PERSONAL_ACCESS_TOKEN=''
 export E2B_API_KEY=''
 export FIRECRAWL_API_KEY=''
+# Optional: pin third-party installer scripts by SHA256.
+# export TAILSCALE_INSTALL_SHA256=''
+# export CODE_SERVER_INSTALL_SHA256=''
+# export OPENCODE_INSTALL_SHA256=''
+# export GROK_INSTALL_SHA256=''
+# Optional: install a specific Grok Build version instead of latest stable.
+# export GROK_VERSION=''
 ```
 
 - `TS_AUTHKEY` is required only when the node is not already logged in to Tailscale.
 - `TS_TAGS` is optional. It is passed as `--advertise-tags` when set.
 - `CODE_SERVER_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect code-server with its built-in password prompt.
 - `OPENCODE_GO_KEY` is required. It is also reused as the API key for the relay-backed model in the Grok configuration.
-- `OPENCODE_WEB_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect OpenCode Web with HTTP Basic Auth. `OPENCODE_WEB_USERNAME` defaults to `opencode`. When enabled, credentials are stored in a root-only environment file, never in the systemd unit.
-- `GIT_SSH_PRIVATE_KEY` is optional. When supplied and `/root/.ssh/id_ed25519` does not already exist, it is written with restrictive permissions. Existing keys are never overwritten.
-- `GIT_REPO` is optional. When it is set, the repository is cloned to `/root/workspace`; an existing checkout is left unchanged.
+- `OPENCODE_WEB_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect OpenCode Web with HTTP Basic Auth. `OPENCODE_WEB_USERNAME` defaults to `opencode`. When enabled, credentials are stored in an owner-only environment file, never in the systemd unit.
+- `GIT_SSH_PRIVATE_KEY` is optional. When supplied and `/home/devbox/.ssh/id_ed25519` does not already exist, it is written with restrictive permissions. Existing keys are never overwritten.
+- `GIT_REPO` is optional. When it is set, the repository is cloned to `/home/devbox/workspace`; an existing checkout is left unchanged.
 - `GITHUB_PERSONAL_ACCESS_TOKEN`, `E2B_API_KEY`, and `FIRECRAWL_API_KEY` are optional credentials for the retained GitHub, E2B, and Firecrawl MCP servers.
-- `TAILSCALE_INSTALL_SHA256`, `CODE_SERVER_INSTALL_SHA256`, `OPENCODE_INSTALL_SHA256`, and `GROK_INSTALL_SHA256` are optional installer pins. When set, bootstrap verifies the downloaded installer SHA256 before running it as root; when unset, the hash is logged and the installer runs unverified.
+- `TAILSCALE_INSTALL_SHA256`, `CODE_SERVER_INSTALL_SHA256`, `OPENCODE_INSTALL_SHA256`, and `GROK_INSTALL_SHA256` are optional installer pins. When set, bootstrap verifies the downloaded installer SHA256 before running it; when unset, the hash is logged and the installer runs unverified.
 - `GROK_VERSION` is optional. When set, that exact Grok Build version is installed instead of latest stable.
 
-Secrets are never embedded in templates, systemd units, README examples, or script logs. OpenCode and MCP keys are stored only in `/root/.config/opencode/opencode.json` with mode `0600`; OpenCode Web credentials are stored in `/root/.config/opencode/web.env` with mode `0600`; the Grok configuration (including the relay model key) is stored in `/root/.grok/config.toml` with mode `0600`.
+Secrets are never embedded in templates, systemd units, README examples, or script logs. OpenCode and MCP keys are stored only in `/home/devbox/.config/opencode/opencode.json` with mode `0600`; OpenCode Web credentials are stored in `/home/devbox/.config/opencode/web.env` with mode `0600`; the Grok configuration (including the relay model key) is stored in `/home/devbox/.grok/config.toml` with mode `0600`.
 
 ## Access
 
@@ -158,7 +171,7 @@ Use an SSH key, ACLs, and Tailscale SSH according to your tailnet policy. This p
 
 ## Destroy And Recreate
 
-1. Commit and push all work from `/root/workspace`.
+1. Commit and push all work from `/home/devbox/workspace`.
 2. Before releasing the ECS, run `sudo tailscale logout`. For an ephemeral node this immediately removes it from the tailnet and frees the `ephemeral-devbox` MagicDNS hostname, so the next instance does not become `ephemeral-devbox-1`.
 3. Delete the ECS instance and any ephemeral disk you no longer need.
 4. Create a new Ubuntu ECS when needed.
@@ -175,7 +188,7 @@ sudo ./reset-local.sh
 sudo ./reset-local.sh --force
 ```
 
-It stops code-server, OpenCode Web, and the OpenCode Go relay, clears their generated configuration and code-server user data (including installed extensions), removes the Grok configuration directory, restores original apt sources from `.orig.ephemeral-devbox` backups when present, removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
+It stops code-server, OpenCode Web, and the OpenCode Go relay, clears the `devbox` generated configuration and code-server user data (including installed extensions), removes `/home/devbox/.grok` (configuration and the installed Grok binary), restores original apt sources from `.orig.ephemeral-devbox` backups when present and removes generated apt sources tracked by `.created.ephemeral-devbox` markers, removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/home/devbox/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
 
 ## Troubleshooting
 
@@ -183,9 +196,9 @@ It stops code-server, OpenCode Web, and the OpenCode Go relay, clears their gene
 | --- | --- |
 | Tailscale cannot connect | Confirm `TS_AUTHKEY` is valid, reusable, ephemeral, and tag-authorized. Run `systemctl status tailscaled` and `tailscale status`. |
 | Serve URL does not work | Confirm MagicDNS/HTTPS access and run `tailscale serve status`. Check tailnet ACLs. |
-| code-server unavailable | Run `systemctl status code-server@root` and inspect `/root/.config/code-server/config.yaml` permissions. |
+| code-server unavailable | Run `systemctl status code-server@devbox` and inspect `/home/devbox/.config/code-server/config.yaml` permissions. |
 | OpenCode Web unavailable | Run `systemctl status opencode-web`; `journalctl -u opencode-web -e` shows runtime errors without exposing config values. |
 | OpenCode Go relay unavailable | Run `systemctl status opencode-go-relay`; `journalctl -u opencode-go-relay -e` shows relay errors. Confirm node is installed and port 8787 is listening with `ss -ltnp | grep 8787`. |
-| Grok model call fails | Confirm the relay is running and `/root/.grok/config.toml` points at `http://127.0.0.1:8787/v1`. Test the relay directly with `curl http://127.0.0.1:8787/v1/models`. |
-| Git SSH clone fails | Confirm the private key can access the repository and that `ssh-keyscan` completed. Test `ssh -T git@github.com` or `ssh -T git@gitee.com`. |
-| Bootstrap refuses workspace | Move or remove the non-Git `/root/workspace` directory rather than allowing the script to overwrite files. |
+| Grok model call fails | Confirm the relay is running and `/home/devbox/.grok/config.toml` points at `http://127.0.0.1:8787/v1`. Test the relay directly with `curl http://127.0.0.1:8787/v1/models`. |
+| Git SSH clone fails | Confirm the private key at `/home/devbox/.ssh/id_ed25519` can access the repository and that `ssh-keyscan` completed. Test as the service user: `sudo -u devbox ssh -T git@github.com` or `sudo -u devbox ssh -T git@gitee.com`. |
+| Bootstrap refuses workspace | Move or remove the non-Git `/home/devbox/workspace` directory rather than allowing the script to overwrite files. |

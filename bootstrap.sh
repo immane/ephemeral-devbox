@@ -3,15 +3,18 @@
 set -Eeuo pipefail
 
 readonly PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly CODE_SERVER_CONFIG_DIR="/root/.config/code-server"
-readonly CODE_SERVER_USER_DIR="/root/.local/share/code-server/User"
+readonly DEVBOX_USER="devbox"
+readonly DEVBOX_HOME="/home/$DEVBOX_USER"
+readonly DEVBOX_SSH_DIR="$DEVBOX_HOME/.ssh"
+readonly CODE_SERVER_CONFIG_DIR="$DEVBOX_HOME/.config/code-server"
+readonly CODE_SERVER_USER_DIR="$DEVBOX_HOME/.local/share/code-server/User"
 readonly EXTERNAL_DNS_DROP_IN="/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf"
-readonly GROK_CONFIG_DIR="/root/.grok"
-readonly OPENCODE_CONFIG_DIR="/root/.config/opencode"
-readonly OPENCODE_WEB_ENV="/root/.config/opencode/web.env"
+readonly GROK_CONFIG_DIR="$DEVBOX_HOME/.grok"
+readonly OPENCODE_CONFIG_DIR="$DEVBOX_HOME/.config/opencode"
+readonly OPENCODE_WEB_ENV="$OPENCODE_CONFIG_DIR/web.env"
 readonly RELAY_SCRIPT="/usr/local/bin/opencode-go-relay.mjs"
 readonly RELAY_SERVICE="/etc/systemd/system/opencode-go-relay.service"
-readonly WORKSPACE="/root/workspace"
+readonly WORKSPACE="$DEVBOX_HOME/workspace"
 readonly OPENCODE_SERVICE="/etc/systemd/system/opencode-web.service"
 CURRENT_STAGE="startup"
 
@@ -83,6 +86,20 @@ install_packages() {
   systemctl enable --now docker
 }
 
+ensure_devbox_user() {
+  CURRENT_STAGE="creating service user"
+  getent group "$DEVBOX_USER" >/dev/null 2>&1 || groupadd "$DEVBOX_USER"
+  if ! id -u "$DEVBOX_USER" >/dev/null 2>&1; then
+    useradd --create-home --user-group --home-dir "$DEVBOX_HOME" --shell /bin/bash "$DEVBOX_USER"
+  fi
+  [[ "$(getent passwd "$DEVBOX_USER" | cut -d: -f6)" == "$DEVBOX_HOME" ]] || fail "$DEVBOX_USER must use $DEVBOX_HOME as its home directory."
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$OPENCODE_CONFIG_DIR" "$GROK_CONFIG_DIR"
+}
+
+run_as_devbox() {
+  runuser -u "$DEVBOX_USER" -- env HOME="$DEVBOX_HOME" PATH="$DEVBOX_HOME/.opencode/bin:$DEVBOX_HOME/.grok/bin:$PATH" "$@"
+}
+
 configure_external_dns() {
   CURRENT_STAGE="configuring external service DNS"
   install -d -m 755 /etc/systemd/resolved.conf.d
@@ -114,7 +131,12 @@ fetch_and_run_installer() {
   else
     log "WARNING: $sha_var is unset; running $url unverified (sha256=$actual)."
   fi
-  bash "$tmp" "$@"
+  if [[ -n "${INSTALL_AS_USER:-}" ]]; then
+    chmod 755 "$tmp"
+    runuser -u "$INSTALL_AS_USER" -- env HOME="$DEVBOX_HOME" PATH="$DEVBOX_HOME/.opencode/bin:$DEVBOX_HOME/.grok/bin:$PATH" bash "$tmp" "$@"
+  else
+    bash "$tmp" "$@"
+  fi
   rm -f "$tmp"
 }
 
@@ -126,7 +148,9 @@ install_tailscale() {
   if ! command -v tailscale >/dev/null 2>&1; then
     fetch_and_run_installer "installing Tailscale" https://tailscale.com/install.sh TAILSCALE_INSTALL_SHA256
   fi
-  systemctl enable tailscaled
+  # An existing registration reconnects as soon as tailscaled runs. Stop and
+  # disable it now so every pre-connect step can still use the Alibaba VPC.
+  systemctl disable --now tailscaled 2>/dev/null || true
 }
 
 switch_apt_to_tsinghua() {
@@ -159,6 +183,7 @@ codename = os.environ["CODENAME"]
 mirror = os.environ["MIRROR_URI"]
 components = "main restricted universe multiverse"
 backup_suffix = ".orig.ephemeral-devbox"
+created_suffix = ".created.ephemeral-devbox"
 
 deb822 = Path(os.environ.get("APT_DEB822", "/etc/apt/sources.list.d/ubuntu.sources"))
 legacy = Path(os.environ.get("APT_LEGACY", "/etc/apt/sources.list"))
@@ -201,13 +226,14 @@ def comment_out_intranet_lines(path: Path) -> bool:
 
 
 if os_id == "debian":
+    debian_components = "main contrib non-free non-free-firmware"
     content = (
         f"Types: deb\nURIs: https://{tuna_host}/debian/\n"
         f"Suites: {codename} {codename}-updates {codename}-backports\n"
-        f"Components: {components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+        f"Components: {debian_components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
         f"Types: deb\nURIs: https://{tuna_host}/debian-security/\n"
         f"Suites: {codename}-security\n"
-        f"Components: {components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+        f"Components: {debian_components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
     )
     candidates = (
         Path(os.environ.get(
@@ -218,12 +244,15 @@ if os_id == "debian":
         legacy,
     )
     target = next((p for p in candidates if p.exists()), candidates[0])
-    current = target.read_text() if target.exists() else ""
+    target_existed = target.exists()
+    current = target.read_text() if target_existed else ""
     backup(target)
     if tuna_host in current:
         print(f"{target} already points to Tsinghua; skipping rewrite")
     else:
         target.write_text(content)
+        if not target_existed:
+            target.with_name(target.name + created_suffix).touch()
         print(f"Wrote Tsinghua debian sources to {target}")
 else:
     if deb822.exists():
@@ -247,8 +276,9 @@ else:
             comment_out_intranet_lines(legacy)
             print(f"Disabled intranet mirror entries in {legacy}")
     else:
+        legacy_existed = legacy.exists()
         backup(legacy)
-        current = legacy.read_text() if legacy.exists() else ""
+        current = legacy.read_text() if legacy_existed else ""
         if tuna_host in current:
             print(f"{legacy} already points to Tsinghua; skipping rewrite")
         else:
@@ -259,6 +289,8 @@ else:
                 f"deb {mirror}/ {codename}-backports {components}\n"
                 f"deb http://security.ubuntu.com/ubuntu/ {codename}-security {components}\n"
             )
+            if not legacy_existed:
+                legacy.with_name(legacy.name + created_suffix).touch()
             print(f"Wrote Tsinghua ubuntu sources to {legacy}")
 
 for extra in glob.glob(dropins):
@@ -309,7 +341,7 @@ install_code_server() {
 
 write_code_server_config() {
   CURRENT_STAGE="writing code-server configuration"
-  install -d -m 700 "$CODE_SERVER_CONFIG_DIR"
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$CODE_SERVER_CONFIG_DIR"
   CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-}" python3 - "$PROJECT_DIR/config/code-server.yaml.template" "$CODE_SERVER_CONFIG_DIR/config.yaml" <<'PY'
 import json
 import os
@@ -330,27 +362,30 @@ else:
     config = config.replace("password: __CODE_SERVER_PASSWORD__\n", "")
 Path(sys.argv[2]).write_text(config)
 PY
+  chown "$DEVBOX_USER:$DEVBOX_USER" "$CODE_SERVER_CONFIG_DIR/config.yaml"
   chmod 600 "$CODE_SERVER_CONFIG_DIR/config.yaml"
   restore_code_server_customizations
-  systemctl enable --now code-server@root
-  systemctl is-active --quiet code-server@root
+  # Migrate pre-devbox installations off the same loopback port.
+  systemctl disable --now code-server@root 2>/dev/null || true
+  systemctl enable --now "code-server@$DEVBOX_USER"
+  systemctl is-active --quiet "code-server@$DEVBOX_USER"
 }
 
 restore_code_server_customizations() {
   CURRENT_STAGE="restoring code-server customizations"
-  install -d -m 700 "$CODE_SERVER_USER_DIR"
-  install -m 600 "$PROJECT_DIR/config/code-server-settings.json.template" "$CODE_SERVER_USER_DIR/settings.json"
-  install -m 600 "$PROJECT_DIR/config/code-server-keybindings.json.template" "$CODE_SERVER_USER_DIR/keybindings.json"
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$CODE_SERVER_USER_DIR"
+  install -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 600 "$PROJECT_DIR/config/code-server-settings.json.template" "$CODE_SERVER_USER_DIR/settings.json"
+  install -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 600 "$PROJECT_DIR/config/code-server-keybindings.json.template" "$CODE_SERVER_USER_DIR/keybindings.json"
 
   local installed extension tmp_vsix
-  installed=$(code-server --list-extensions 2>/dev/null || true)
+  installed=$(run_as_devbox code-server --list-extensions 2>/dev/null || true)
   while IFS= read -r extension || [[ -n "$extension" ]]; do
     extension="${extension%$'\r'}"
     [[ -z "$extension" || "$extension" == \#* ]] && continue
     if [[ "$extension" == http://* || "$extension" == https://* ]]; then
       log "Installing code-server extension from VSIX URL: $extension"
       tmp_vsix="$(mktemp --suffix=.vsix)"
-      if curl -fSL -o "$tmp_vsix" "$extension" && code-server --install-extension "$tmp_vsix"; then
+      if curl -fSL -o "$tmp_vsix" "$extension" && run_as_devbox code-server --install-extension "$tmp_vsix"; then
         log "Installed code-server extension from VSIX URL: $extension"
       else
         warn "Failed to install code-server extension from VSIX URL: $extension (skipping)"
@@ -363,7 +398,7 @@ restore_code_server_customizations() {
       continue
     fi
     log "Installing code-server extension: $extension"
-    if ! code-server --install-extension "$extension"; then
+    if ! run_as_devbox code-server --install-extension "$extension"; then
       warn "Failed to install code-server extension: $extension (skipping)"
       continue
     fi
@@ -373,13 +408,11 @@ restore_code_server_customizations() {
 
 install_opencode() {
   CURRENT_STAGE="installing OpenCode"
-  # The official installer commonly uses this directory before a new login shell is opened.
-  export PATH="/root/.opencode/bin:$PATH"
-  if ! command -v opencode >/dev/null 2>&1; then
-    fetch_and_run_installer "installing OpenCode" https://opencode.ai/install OPENCODE_INSTALL_SHA256
+  OPENCODE_BINARY="$DEVBOX_HOME/.opencode/bin/opencode"
+  if [[ ! -x "$OPENCODE_BINARY" ]]; then
+    INSTALL_AS_USER="$DEVBOX_USER" fetch_and_run_installer "installing OpenCode" https://opencode.ai/install OPENCODE_INSTALL_SHA256
   fi
-  OPENCODE_BINARY="$(command -v opencode || true)"
-  [[ -n "$OPENCODE_BINARY" ]] || fail 'OpenCode installation completed but opencode is not on PATH.'
+  [[ -x "$OPENCODE_BINARY" ]] || fail 'OpenCode installation completed but opencode is not installed for devbox.'
   OPENCODE_BINARY="$(readlink -f "$OPENCODE_BINARY")"
   export OPENCODE_BINARY
 }
@@ -387,7 +420,7 @@ install_opencode() {
 write_opencode_config() {
   CURRENT_STAGE="writing OpenCode configuration"
   require_value OPENCODE_GO_KEY
-  install -d -m 700 "$OPENCODE_CONFIG_DIR"
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$OPENCODE_CONFIG_DIR"
   OPENCODE_GO_KEY="$OPENCODE_GO_KEY" \
   GITHUB_PERSONAL_ACCESS_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:-}" \
   E2B_API_KEY="${E2B_API_KEY:-}" \
@@ -420,6 +453,7 @@ data = replace(data)
 destination.write_text(json.dumps(data, indent=2) + "\n")
 json.loads(destination.read_text())
 PY
+  chown "$DEVBOX_USER:$DEVBOX_USER" "$OPENCODE_CONFIG_DIR/opencode.json"
   chmod 600 "$OPENCODE_CONFIG_DIR/opencode.json"
 }
 
@@ -448,22 +482,29 @@ content = "\n".join((
 ))
 Path(sys.argv[1]).write_text(content)
 PY
+  chown "$DEVBOX_USER:$DEVBOX_USER" "$OPENCODE_WEB_ENV"
   chmod 600 "$OPENCODE_WEB_ENV"
 }
 
 write_opencode_service() {
   CURRENT_STAGE="creating OpenCode Web service"
-  install -d -m 755 "$WORKSPACE"
-  OPENCODE_BINARY="$OPENCODE_BINARY" python3 - "$PROJECT_DIR/config/opencode-web.service.template" "$OPENCODE_SERVICE" <<'PY'
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 755 "$WORKSPACE"
+  OPENCODE_BINARY="$OPENCODE_BINARY" WORKSPACE="$WORKSPACE" OPENCODE_WEB_ENV="$OPENCODE_WEB_ENV" python3 - "$PROJECT_DIR/config/opencode-web.service.template" "$OPENCODE_SERVICE" <<'PY'
 import os
 import sys
 from pathlib import Path
 
 template = Path(sys.argv[1]).read_text()
 binary = os.environ["OPENCODE_BINARY"]
-if "__OPENCODE_BINARY__" not in template:
+workspace = os.environ["WORKSPACE"]
+web_env = os.environ["OPENCODE_WEB_ENV"]
+if "__OPENCODE_BINARY__" not in template or "__WORKSPACE__" not in template or "__OPENCODE_WEB_ENV__" not in template:
     raise SystemExit("OpenCode service template placeholder is missing")
-Path(sys.argv[2]).write_text(template.replace("__OPENCODE_BINARY__", binary))
+Path(sys.argv[2]).write_text(
+    template.replace("__OPENCODE_BINARY__", binary)
+    .replace("__WORKSPACE__", workspace)
+    .replace("__OPENCODE_WEB_ENV__", web_env)
+)
 PY
   chmod 644 "$OPENCODE_SERVICE"
   systemctl daemon-reload
@@ -473,18 +514,15 @@ PY
 
 install_grok() {
   CURRENT_STAGE="installing Grok Build"
-  # The x.ai installer targets $HOME/.grok/bin (i.e. /root/.grok/bin as root)
-  # and symlinks into /usr/local/bin when it is on PATH and writable.
-  export PATH="/root/.grok/bin:/root/.local/bin:/usr/local/bin:$PATH"
-  if ! command -v grok >/dev/null 2>&1; then
+  GROK_BINARY="$GROK_CONFIG_DIR/bin/grok"
+  if [[ ! -x "$GROK_BINARY" ]]; then
     if [[ -n "${GROK_VERSION:-}" ]]; then
-      fetch_and_run_installer "installing Grok Build" https://x.ai/cli/install.sh GROK_INSTALL_SHA256 "$GROK_VERSION"
+      INSTALL_AS_USER="$DEVBOX_USER" fetch_and_run_installer "installing Grok Build" https://x.ai/cli/install.sh GROK_INSTALL_SHA256 "$GROK_VERSION"
     else
-      fetch_and_run_installer "installing Grok Build" https://x.ai/cli/install.sh GROK_INSTALL_SHA256
+      INSTALL_AS_USER="$DEVBOX_USER" fetch_and_run_installer "installing Grok Build" https://x.ai/cli/install.sh GROK_INSTALL_SHA256
     fi
   fi
-  GROK_BINARY="$(command -v grok || true)"
-  [[ -n "$GROK_BINARY" ]] || fail 'Grok installation completed but grok is not on PATH.'
+  [[ -x "$GROK_BINARY" ]] || fail 'Grok installation completed but grok is not installed for devbox.'
   GROK_BINARY="$(readlink -f "$GROK_BINARY")"
   export GROK_BINARY
 }
@@ -492,20 +530,22 @@ install_grok() {
 write_grok_config() {
   CURRENT_STAGE="writing Grok configuration"
   require_value OPENCODE_GO_KEY
-  install -d -m 700 "$GROK_CONFIG_DIR"
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$GROK_CONFIG_DIR"
   OPENCODE_GO_KEY="$OPENCODE_GO_KEY" python3 - "$PROJECT_DIR/config/grok-config.toml.template" "$GROK_CONFIG_DIR/config.toml" <<'PY'
 import os
 import sys
+import json
 from pathlib import Path
 
 template = Path(sys.argv[1]).read_text()
 key = os.environ["OPENCODE_GO_KEY"]
 if "\n" in key or "\r" in key:
     raise SystemExit("OPENCODE_GO_KEY must not contain a newline")
-if "__OPENCODE_GO_KEY__" not in template:
+if "__OPENCODE_GO_KEY_JSON__" not in template:
     raise SystemExit("Grok config template placeholder is missing")
-Path(sys.argv[2]).write_text(template.replace("__OPENCODE_GO_KEY__", key))
+Path(sys.argv[2]).write_text(template.replace("__OPENCODE_GO_KEY_JSON__", json.dumps(key)))
 PY
+  chown "$DEVBOX_USER:$DEVBOX_USER" "$GROK_CONFIG_DIR/config.toml"
   chmod 600 "$GROK_CONFIG_DIR/config.toml"
 }
 
@@ -532,22 +572,24 @@ configure_tailscale_serve() {
 configure_git_ssh() {
   CURRENT_STAGE="configuring Git SSH"
   [[ -n "${GIT_SSH_PRIVATE_KEY:-}" ]] || return 0
-  install -d -m 700 /root/.ssh
-  if [[ ! -e /root/.ssh/id_ed25519 ]]; then
-    (umask 077; printf '%s\n' "$GIT_SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519)
-    chmod 600 /root/.ssh/id_ed25519
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$DEVBOX_SSH_DIR"
+  if [[ ! -e "$DEVBOX_SSH_DIR/id_ed25519" ]]; then
+    (umask 077; printf '%s\n' "$GIT_SSH_PRIVATE_KEY" > "$DEVBOX_SSH_DIR/id_ed25519")
+    chown "$DEVBOX_USER:$DEVBOX_USER" "$DEVBOX_SSH_DIR/id_ed25519"
+    chmod 600 "$DEVBOX_SSH_DIR/id_ed25519"
   else
-    warn 'Keeping existing /root/.ssh/id_ed25519; it was not overwritten.'
+    warn "Keeping existing $DEVBOX_SSH_DIR/id_ed25519; it was not overwritten."
   fi
 
-  touch /root/.ssh/known_hosts
-  chmod 600 /root/.ssh/known_hosts
+  touch "$DEVBOX_SSH_DIR/known_hosts"
+  chown "$DEVBOX_USER:$DEVBOX_USER" "$DEVBOX_SSH_DIR/known_hosts"
+  chmod 600 "$DEVBOX_SSH_DIR/known_hosts"
   local scan merged
   scan=$(mktemp)
   merged=$(mktemp)
   if ssh-keyscan -T 10 -H github.com gitee.com >"$scan" 2>/dev/null; then
-    sort -u /root/.ssh/known_hosts "$scan" >"$merged"
-    install -m 600 "$merged" /root/.ssh/known_hosts
+    sort -u "$DEVBOX_SSH_DIR/known_hosts" "$scan" >"$merged"
+    install -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 600 "$merged" "$DEVBOX_SSH_DIR/known_hosts"
   else
     warn 'Could not retrieve Git host keys; SSH clone may ask for host verification.'
   fi
@@ -558,12 +600,13 @@ configure_git_ssh() {
 prepare_workspace() {
   CURRENT_STAGE="preparing workspace"
   if [[ -z "${GIT_REPO:-}" ]]; then
-    install -d -m 755 "$WORKSPACE"
+    install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 755 "$WORKSPACE"
     return
   fi
 
   if [[ -d "$WORKSPACE/.git" ]]; then
     log "Workspace already contains a Git repository; skipping clone."
+    chown -R "$DEVBOX_USER:$DEVBOX_USER" "$WORKSPACE"
     return
   fi
   if [[ -e "$WORKSPACE" ]]; then
@@ -575,7 +618,7 @@ prepare_workspace() {
     ((${#entries[@]} == 0)) || fail "$WORKSPACE exists and is not a Git repository; refusing to overwrite it."
   fi
   rmdir "$WORKSPACE" 2>/dev/null || true
-  git clone "$GIT_REPO" "$WORKSPACE"
+  run_as_devbox git clone "$GIT_REPO" "$WORKSPACE"
 }
 
 serve_url() {
@@ -634,44 +677,46 @@ EOF
 main() {
   load_secrets_env
   require_root_and_supported_os
-  log '[1/12] Installing packages'
+  log '[1/13] Installing packages'
   install_packages
-  log '[2/12] Configuring external service DNS'
+  log '[2/13] Creating service user'
+  ensure_devbox_user
+  log '[3/13] Configuring external service DNS'
   configure_external_dns
-  log '[3/12] Installing Tailscale (binary only; connection deferred to the end)'
+  log '[4/13] Installing Tailscale (connection deferred to the end)'
   install_tailscale
-  log '[4/12] Installing and configuring code-server'
+  log '[5/13] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[5/12] Installing OpenCode'
+  log '[6/13] Installing OpenCode'
   install_opencode
-  log '[6/12] Configuring OpenCode'
+  log '[7/13] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[7/12] Starting OpenCode Web'
+  log '[8/13] Starting OpenCode Web'
   write_opencode_service
-  log '[8/12] Installing Grok Build and starting OpenCode Go relay'
+  log '[9/13] Installing Grok Build and starting OpenCode Go relay'
   install_grok
   write_grok_config
   write_opencode_go_relay
-  log '[9/12] Configuring Git SSH and preparing workspace'
+  log '[10/13] Configuring Git SSH and preparing workspace'
   configure_git_ssh
   prepare_workspace
   # Switch apt to public mirrors before connecting Tailscale: once connected,
   # Tailscale routes conflict with the Alibaba Cloud VPC intranet, dropping
   # intranet SSH and making the intranet apt mirror unreachable.
-  log '[10/12] Switching apt sources to Tsinghua mirrors'
+  log '[11/13] Switching apt sources to Tsinghua mirrors'
   switch_apt_to_tsinghua
   # Connect Tailscale as late as possible: once connected, Tailscale routes
   # conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH
   # session, so all intranet-dependent work above must finish first.
-  log '[11/12] Connecting Tailscale'
+  log '[12/13] Connecting Tailscale'
   connect_tailscale
-  log '[12/12] Configuring Tailscale Serve and verifying services'
+  log '[13/13] Configuring Tailscale Serve and verifying services'
   configure_tailscale_serve
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
-  systemctl is-active --quiet code-server@root
+  systemctl is-active --quiet "code-server@$DEVBOX_USER"
   systemctl is-active --quiet opencode-web
   systemctl is-active --quiet opencode-go-relay
   print_summary

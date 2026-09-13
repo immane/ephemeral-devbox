@@ -16,7 +16,7 @@ default = "deepseek-flash"
 model = "deepseek-v4.1-flash"
 base_url = "http://127.0.0.1:8787/v1"
 name = "DeepSeek V4.1 Flash - OpenCode Go"
-api_key = "__OPENCODE_GO_KEY__"
+api_key = __OPENCODE_GO_KEY_JSON__
 context_window = 1048576
 max_completion_tokens = 16384
 
