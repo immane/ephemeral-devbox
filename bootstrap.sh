@@ -68,6 +68,142 @@ install_tailscale() {
   systemctl enable --now tailscaled
 }
 
+switch_apt_to_tsinghua() {
+  CURRENT_STAGE="switching apt sources to Tsinghua mirrors"
+  # Must run before `tailscale up`: after Tailscale routes are installed the
+  # Alibaba Cloud VPC intranet mirror is unreachable, so later apt use needs
+  # a public mirror. The initial package install stays on the intranet mirror
+  # for speed; switch here while intranet access still works.
+  # Follows https://mirrors.tuna.tsinghua.edu.cn/help/ubuntu/ : normal suites
+  # come from the Tsinghua mirror, security updates stay on the official
+  # source because mirror sync delay can postpone security fixes.
+  local codename arch mirror_uri os_id
+  # shellcheck disable=SC1091
+  os_id="$(. /etc/os-release && printf '%s' "${ID:-}")"
+  codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+  [[ -n "$codename" ]] || codename="$(lsb_release -cs 2>/dev/null || true)"
+  [[ -n "$codename" ]] || fail 'Cannot determine the distribution codename for the mirror switch.'
+  arch="$(dpkg --print-architecture 2>/dev/null || printf 'amd64')"
+  mirror_uri='https://mirrors.tuna.tsinghua.edu.cn/ubuntu'
+  case "$arch" in
+    arm64|armhf|ppc64el|riscv64|s390x) mirror_uri='https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports' ;;
+  esac
+  OS_ID="$os_id" CODENAME="$codename" MIRROR_URI="$mirror_uri" python3 - <<'PY'
+import glob
+import os
+from pathlib import Path
+
+os_id = os.environ["OS_ID"]
+codename = os.environ["CODENAME"]
+mirror = os.environ["MIRROR_URI"]
+components = "main restricted universe multiverse"
+backup_suffix = ".orig.ephemeral-devbox"
+
+deb822 = Path(os.environ.get("APT_DEB822", "/etc/apt/sources.list.d/ubuntu.sources"))
+legacy = Path(os.environ.get("APT_LEGACY", "/etc/apt/sources.list"))
+dropins = os.environ.get("APT_DROPINS", "/etc/apt/sources.list.d/*")
+keyring = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+tuna_host = "mirrors.tuna.tsinghua.edu.cn"
+intranet_markers = ("aliyun", "aliyuncs", "mirrors.cloud.aliyuncs.com")
+
+
+def backup(path: Path) -> None:
+    target = path.with_name(path.name + backup_suffix)
+    if path.exists() and not target.exists():
+        target.write_bytes(path.read_bytes())
+
+
+def has_active_intranet_line(text: str) -> bool:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            if any(marker in stripped for marker in intranet_markers):
+                return True
+    return False
+
+
+def comment_out_intranet_lines(path: Path) -> bool:
+    text = path.read_text()
+    changed = False
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and any(m in stripped for m in intranet_markers):
+            out.append("# disabled by ephemeral-devbox (intranet mirror unreachable after Tailscale up): " + line)
+            changed = True
+        else:
+            out.append(line)
+    if changed:
+        backup(path)
+        path.write_text("\n".join(out) + ("\n" if out else ""))
+    return changed
+
+
+if os_id == "debian":
+    content = (
+        f"Types: deb\nURIs: https://{tuna_host}/debian/\n"
+        f"Suites: {codename} {codename}-updates {codename}-backports\n"
+        f"Components: {components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+        f"Types: deb\nURIs: https://{tuna_host}/debian-security/\n"
+        f"Suites: {codename}-security\n"
+        f"Components: {components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+    )
+    target = deb822 if deb822.exists() else legacy
+    backup(target)
+    if tuna_host in target.read_text():
+        print(f"{target} already points to Tsinghua; skipping rewrite")
+    else:
+        target.write_text(content)
+        print(f"Wrote Tsinghua debian sources to {target}")
+else:
+    if deb822.exists():
+        backup(deb822)
+        current = deb822.read_text()
+        if tuna_host in current and "security.ubuntu.com" in current:
+            print(f"{deb822} already points to Tsinghua; skipping rewrite")
+        else:
+            deb822.write_text(
+                f"Types: deb\nURIs: {mirror}\n"
+                f"Suites: {codename} {codename}-updates {codename}-backports\n"
+                f"Components: {components}\nSigned-By: {keyring}\n\n"
+                f"# Security updates stay on the official source: mirror sync delay can\n"
+                f"# postpone security fixes (see https://{tuna_host}/help/ubuntu/).\n"
+                f"Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\n"
+                f"Suites: {codename}-security\n"
+                f"Components: {components}\nSigned-By: {keyring}\n"
+            )
+            print(f"Wrote Tsinghua ubuntu sources to {deb822}")
+        if legacy.exists() and has_active_intranet_line(legacy.read_text()):
+            comment_out_intranet_lines(legacy)
+            print(f"Disabled intranet mirror entries in {legacy}")
+    else:
+        backup(legacy)
+        current = legacy.read_text() if legacy.exists() else ""
+        if tuna_host in current:
+            print(f"{legacy} already points to Tsinghua; skipping rewrite")
+        else:
+            legacy.write_text(
+                f"# Generated by ephemeral-devbox: Tsinghua mirrors (security stays official).\n"
+                f"deb {mirror}/ {codename} {components}\n"
+                f"deb {mirror}/ {codename}-updates {components}\n"
+                f"deb {mirror}/ {codename}-backports {components}\n"
+                f"deb http://security.ubuntu.com/ubuntu/ {codename}-security {components}\n"
+            )
+            print(f"Wrote Tsinghua ubuntu sources to {legacy}")
+
+for extra in glob.glob(dropins):
+    path = Path(extra)
+    if path == deb822 or not path.is_file():
+        continue
+    if path.suffix not in (".list", ".sources"):
+        continue
+    if has_active_intranet_line(path.read_text()):
+        comment_out_intranet_lines(path)
+        print(f"Disabled intranet mirror entries in {path}")
+PY
+  apt-get update
+}
+
 tailscale_connected() {
   tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null
 }
@@ -371,31 +507,36 @@ EOF
 
 main() {
   require_root_and_supported_os
-  log '[1/10] Installing packages'
+  log '[1/11] Installing packages'
   install_packages
-  log '[2/10] Configuring external service DNS'
+  log '[2/11] Configuring external service DNS'
   configure_external_dns
-  log '[3/10] Installing Tailscale (binary only; connection deferred to the end)'
+  log '[3/11] Installing Tailscale (binary only; connection deferred to the end)'
   install_tailscale
-  log '[4/10] Installing and configuring code-server'
+  log '[4/11] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[5/10] Installing OpenCode'
+  log '[5/11] Installing OpenCode'
   install_opencode
-  log '[6/10] Configuring OpenCode'
+  log '[6/11] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[7/10] Starting OpenCode Web'
+  log '[7/11] Starting OpenCode Web'
   write_opencode_service
-  log '[8/10] Configuring Git SSH and preparing workspace'
+  log '[8/11] Configuring Git SSH and preparing workspace'
   configure_git_ssh
   prepare_workspace
+  # Switch apt to public mirrors before connecting Tailscale: once connected,
+  # Tailscale routes conflict with the Alibaba Cloud VPC intranet, dropping
+  # intranet SSH and making the intranet apt mirror unreachable.
+  log '[9/11] Switching apt sources to Tsinghua mirrors'
+  switch_apt_to_tsinghua
   # Connect Tailscale as late as possible: once connected, Tailscale routes
   # conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH
   # session, so all intranet-dependent work above must finish first.
-  log '[9/10] Connecting Tailscale'
+  log '[10/11] Connecting Tailscale'
   connect_tailscale
-  log '[10/10] Configuring Tailscale Serve and verifying services'
+  log '[11/11] Configuring Tailscale Serve and verifying services'
   configure_tailscale_serve
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
