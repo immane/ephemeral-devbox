@@ -90,7 +90,7 @@ ensure_devbox_user() {
   CURRENT_STAGE="creating service user"
   getent group "$DEVBOX_USER" >/dev/null 2>&1 || groupadd "$DEVBOX_USER"
   if ! id -u "$DEVBOX_USER" >/dev/null 2>&1; then
-    useradd --create-home --user-group --home-dir "$DEVBOX_HOME" --shell /bin/bash "$DEVBOX_USER"
+    useradd --create-home --gid "$DEVBOX_USER" --home-dir "$DEVBOX_HOME" --shell /bin/bash "$DEVBOX_USER"
   fi
   [[ "$(getent passwd "$DEVBOX_USER" | cut -d: -f6)" == "$DEVBOX_HOME" ]] || fail "$DEVBOX_USER must use $DEVBOX_HOME as its home directory."
   install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$OPENCODE_CONFIG_DIR" "$GROK_CONFIG_DIR"

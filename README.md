@@ -18,12 +18,11 @@ mkdir -p /root/ephemeral-devbox
 scp secrets.env root@<host>:/root/ephemeral-devbox/secrets.env
 curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
 
-# Option B: source locally-prepared values so the environment carries them
-source secrets.env
-curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+# Option B: have root source a local file, then run the loader with those values
+sudo bash -c 'set -a; . "$1"; set +a; curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | bash' bash "$PWD/secrets.env"
 ```
 
-Option B works because `bootstrap.sh` automatically sources `secrets.env` when present and otherwise falls back to the inherited environment (`sudo -E` preserves it).
+Option B works even when `secrets.env` is `root:root` with mode `600`, and does not depend on `sudo -E` preserving custom environment variables. The loader receives the sourced values, then `bootstrap.sh` falls back to that inherited environment because no `secrets.env` exists in its checkout.
 
 Pin a reviewed version for reproducibility instead of tracking `main`:
 
