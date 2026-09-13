@@ -46,21 +46,33 @@ require_value() {
 load_secrets_env() {
   CURRENT_STAGE="loading secrets"
   local secrets_file="$PROJECT_DIR/secrets.env"
-  [[ -f "$secrets_file" ]] || {
+  if [[ -f "$secrets_file" ]]; then
+    local meta
+    meta=$(stat -c '%a %u' "$secrets_file" 2>/dev/null || printf '')
+    case "$meta" in
+      '600 0'|'400 0') ;;
+      '') fail "Cannot inspect $secrets_file; refusing to load secrets." ;;
+      *) fail "$secrets_file must be owned by root with mode 600 or 400 (found: $meta); refusing to source it as root." ;;
+    esac
+    log "Loading secrets from $secrets_file (values in the file take precedence)."
+    set -a
+    # shellcheck disable=SC1090
+    . "$secrets_file"
+    set +a
+  else
     log 'No secrets.env next to bootstrap.sh; using the inherited environment.'
-    return 0
-  }
-  local mode
-  mode=$(stat -c %a "$secrets_file" 2>/dev/null || printf '')
-  case "$mode" in
-    600|400|"") ;;
-    *) warn "$secrets_file has mode $mode; consider chmod 600 so other users cannot read it." ;;
-  esac
-  log "Loading secrets from $secrets_file (values in the file take precedence)."
-  set -a
-  # shellcheck disable=SC1090
-  . "$secrets_file"
-  set +a
+  fi
+  unexport_secrets
+}
+
+unexport_secrets() {
+  # Secrets must not leak into child processes (notably the third-party
+  # installer shells below). Consumers in this script use shell variables or
+  # per-command environment, so unexporting is safe.
+  local name
+  for name in TS_AUTHKEY TS_TAGS CODE_SERVER_PASSWORD OPENCODE_WEB_PASSWORD OPENCODE_WEB_USERNAME OPENCODE_GO_KEY GIT_SSH_PRIVATE_KEY GIT_REPO GITHUB_PERSONAL_ACCESS_TOKEN E2B_API_KEY FIRECRAWL_API_KEY; do
+    export -n "$name" 2>/dev/null || true
+  done
 }
 
 install_packages() {
@@ -80,15 +92,41 @@ configure_external_dns() {
   systemctl is-active --quiet systemd-resolved
 }
 
+fetch_and_run_installer() {
+  # Download a third-party installer, verify its SHA256 when a pinned value
+  # is provided, and run it. Piping curl to sh can never be fully safe; the
+  # *_INSTALL_SHA256 variables (see secrets.env.example) turn a silent
+  # compromise into a hard failure, and the hash is always logged for audit.
+  local stage=$1 url=$2 sha_var=$3
+  shift 3
+  CURRENT_STAGE="$stage"
+  local tmp expected actual
+  tmp="$(mktemp)"
+  curl -fsSL -o "$tmp" "$url"
+  expected="${!sha_var:-}"
+  actual="$(sha256sum "$tmp" | awk '{print $1}')"
+  if [[ -n "$expected" ]]; then
+    if [[ "$actual" != "$expected" ]]; then
+      rm -f "$tmp"
+      fail "Checksum mismatch for $url (sha256=$actual, expected ${sha_var})."
+    fi
+    log "Verified $url (sha256=$actual)."
+  else
+    log "WARNING: $sha_var is unset; running $url unverified (sha256=$actual)."
+  fi
+  bash "$tmp" "$@"
+  rm -f "$tmp"
+}
+
 install_tailscale() {
   CURRENT_STAGE="installing Tailscale"
-  # Installs the binary and enables the daemon only; `tailscale up` is
-  # deferred to the end of bootstrap (see main) to avoid conflicting with
-  # the Alibaba Cloud VPC intranet while earlier steps still need it.
+  # Installs the binary and enables the daemon only; the daemon is started in
+  # connect_tailscale so no Tailscale routes exist before the late connect
+  # step (see main), keeping the Alibaba Cloud VPC intranet usable until then.
   if ! command -v tailscale >/dev/null 2>&1; then
-    curl -fsSL https://tailscale.com/install.sh | sh
+    fetch_and_run_installer "installing Tailscale" https://tailscale.com/install.sh TAILSCALE_INSTALL_SHA256
   fi
-  systemctl enable --now tailscaled
+  systemctl enable tailscaled
 }
 
 switch_apt_to_tsinghua() {
@@ -171,9 +209,18 @@ if os_id == "debian":
         f"Suites: {codename}-security\n"
         f"Components: {components}\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
     )
-    target = deb822 if deb822.exists() else legacy
+    candidates = (
+        Path(os.environ.get(
+            "APT_DEBIAN_SOURCES",
+            "/etc/apt/sources.list.d/debian.sources",
+        )),
+        deb822,
+        legacy,
+    )
+    target = next((p for p in candidates if p.exists()), candidates[0])
+    current = target.read_text() if target.exists() else ""
     backup(target)
-    if tuna_host in target.read_text():
+    if tuna_host in current:
         print(f"{target} already points to Tsinghua; skipping rewrite")
     else:
         target.write_text(content)
@@ -233,6 +280,10 @@ tailscale_connected() {
 
 connect_tailscale() {
   CURRENT_STAGE="connecting Tailscale"
+  # Starting the daemon here (not in install_tailscale) guarantees no
+  # Tailscale routes are installed before this late step, even on machines
+  # with persisted Tailscale state that would otherwise auto-reconnect.
+  systemctl enable --now tailscaled
   if tailscale_connected; then
     log 'Tailscale is already connected; retaining its existing registration.'
     return
@@ -252,7 +303,7 @@ connect_tailscale() {
 install_code_server() {
   CURRENT_STAGE="installing code-server"
   if ! command -v code-server >/dev/null 2>&1; then
-    curl -fsSL https://code-server.dev/install.sh | sh
+    fetch_and_run_installer "installing code-server" https://code-server.dev/install.sh CODE_SERVER_INSTALL_SHA256
   fi
 }
 
@@ -325,7 +376,7 @@ install_opencode() {
   # The official installer commonly uses this directory before a new login shell is opened.
   export PATH="/root/.opencode/bin:$PATH"
   if ! command -v opencode >/dev/null 2>&1; then
-    curl -fsSL https://opencode.ai/install | bash
+    fetch_and_run_installer "installing OpenCode" https://opencode.ai/install OPENCODE_INSTALL_SHA256
   fi
   OPENCODE_BINARY="$(command -v opencode || true)"
   [[ -n "$OPENCODE_BINARY" ]] || fail 'OpenCode installation completed but opencode is not on PATH.'
@@ -426,7 +477,11 @@ install_grok() {
   # and symlinks into /usr/local/bin when it is on PATH and writable.
   export PATH="/root/.grok/bin:/root/.local/bin:/usr/local/bin:$PATH"
   if ! command -v grok >/dev/null 2>&1; then
-    curl -fsSL https://x.ai/cli/install.sh | bash
+    if [[ -n "${GROK_VERSION:-}" ]]; then
+      fetch_and_run_installer "installing Grok Build" https://x.ai/cli/install.sh GROK_INSTALL_SHA256 "$GROK_VERSION"
+    else
+      fetch_and_run_installer "installing Grok Build" https://x.ai/cli/install.sh GROK_INSTALL_SHA256
+    fi
   fi
   GROK_BINARY="$(command -v grok || true)"
   [[ -n "$GROK_BINARY" ]] || fail 'Grok installation completed but grok is not on PATH.'

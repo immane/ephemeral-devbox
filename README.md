@@ -52,7 +52,7 @@ vim secrets.env
 sudo -E ./bootstrap.sh
 ```
 
-`bootstrap.sh` automatically sources `secrets.env` from its own directory when the file exists, so there is no need to source it manually beforehand. Values in the file take precedence over the inherited environment. Keep the file root-readable-only (`chmod 600 secrets.env`); bootstrap warns if other users can read it.
+`bootstrap.sh` automatically sources `secrets.env` from its own directory when the file exists, so there is no need to source it manually beforehand. Values in the file take precedence over the inherited environment. The file must be owned by root with mode `600` or `400`; bootstrap refuses to load it otherwise. Exported secrets are unexported before any third-party installer runs, so installer shells never inherit them.
 
 Make scripts executable after a fresh clone if Git did not preserve their mode:
 
@@ -68,7 +68,7 @@ On a fresh ECS, a single command fetches this repository and runs bootstrap with
 curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
 ```
 
-`remote-install.sh` installs git when missing, clones (or fast-forwards) the repository to `/root/ephemeral-devbox`, checks out the ref, refuses to overwrite a non-Git directory, requires `secrets.env`, and then execs `bootstrap.sh`. Two ways to provide secrets (pick one):
+`remote-install.sh` installs git when missing, clones (or updates a clean checkout of) the repository to `/root/ephemeral-devbox`, checks out the ref, refuses to overwrite a non-Git directory or a checkout with tracked local changes, requires `secrets.env` (or an exported `OPENCODE_GO_KEY`), and then execs `bootstrap.sh`. Two ways to provide secrets (pick one):
 
 ```bash
 # Option A: stage the file before cloning (it is kept across the clone, mode 600)
@@ -87,8 +87,11 @@ Pin a reviewed version for reproducibility instead of tracking `main`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/<tag-or-sha>/remote-install.sh | sudo -E bash
-EPHEMERAL_DEVBOX_REF=<tag-or-sha> curl -fsSL .../main/remote-install.sh | sudo -E bash
+export EPHEMERAL_DEVBOX_REF=<tag-or-sha>
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
 ```
+
+(The `export` must precede the pipeline: prefixing `curl` would scope the variable to `curl` only, not to the shell running the loader.)
 
 `EPHEMERAL_DEVBOX_REPO`, `EPHEMERAL_DEVBOX_REF` (branch, tag, or commit SHA), and `EPHEMERAL_DEVBOX_DIR` override the defaults. Piping to bash trusts that ref tip on first use; prefer a tag or SHA you have reviewed.
 
@@ -124,6 +127,8 @@ export FIRECRAWL_API_KEY=''
 - `GIT_SSH_PRIVATE_KEY` is optional. When supplied and `/root/.ssh/id_ed25519` does not already exist, it is written with restrictive permissions. Existing keys are never overwritten.
 - `GIT_REPO` is optional. When it is set, the repository is cloned to `/root/workspace`; an existing checkout is left unchanged.
 - `GITHUB_PERSONAL_ACCESS_TOKEN`, `E2B_API_KEY`, and `FIRECRAWL_API_KEY` are optional credentials for the retained GitHub, E2B, and Firecrawl MCP servers.
+- `TAILSCALE_INSTALL_SHA256`, `CODE_SERVER_INSTALL_SHA256`, `OPENCODE_INSTALL_SHA256`, and `GROK_INSTALL_SHA256` are optional installer pins. When set, bootstrap verifies the downloaded installer SHA256 before running it as root; when unset, the hash is logged and the installer runs unverified.
+- `GROK_VERSION` is optional. When set, that exact Grok Build version is installed instead of latest stable.
 
 Secrets are never embedded in templates, systemd units, README examples, or script logs. OpenCode and MCP keys are stored only in `/root/.config/opencode/opencode.json` with mode `0600`; OpenCode Web credentials are stored in `/root/.config/opencode/web.env` with mode `0600`; the Grok configuration (including the relay model key) is stored in `/root/.grok/config.toml` with mode `0600`.
 
@@ -170,7 +175,7 @@ sudo ./reset-local.sh
 sudo ./reset-local.sh --force
 ```
 
-It stops code-server, OpenCode Web, and the OpenCode Go relay, clears their generated configuration and code-server user data (including installed extensions), removes the Grok configuration directory, the external DNS drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
+It stops code-server, OpenCode Web, and the OpenCode Go relay, clears their generated configuration and code-server user data (including installed extensions), removes the Grok configuration directory, restores original apt sources from `.orig.ephemeral-devbox` backups when present, removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/root/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
 
 ## Troubleshooting
 

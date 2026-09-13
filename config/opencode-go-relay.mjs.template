@@ -5,9 +5,31 @@ import { Readable } from "node:stream";
 const PORT = 8787;
 const UPSTREAM = "https://opencode.ai/zen/go";
 const SESSION = process.env.OPENCODE_SESSION || `grok-${os.hostname()}`;
+// The whole body used to be buffered without a cap, so any local process
+// could exhaust memory via loopback. 32 MiB comfortably fits chat
+// completions (including image parts) while bounding abuse.
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
+// Time-to-first-byte budget for the upstream; cleared once response headers
+// arrive so long SSE streams are not cut off.
+const UPSTREAM_TTFB_TIMEOUT_MS = 5 * 60 * 1000;
 
 const server = http.createServer(async (req, res) => {
+  // Loopback-only relay for long-lived SSE streams: Node's default 5-minute
+  // server request timeout would kill slow generations.
+  server.requestTimeout = 0;
+  const controller = new AbortController();
+  const ttfb = setTimeout(() => controller.abort(new Error("upstream time-to-first-byte timeout")), UPSTREAM_TTFB_TIMEOUT_MS);
+  req.on("close", () => {
+    if (!res.writableEnded) controller.abort(new Error("client closed connection"));
+  });
   try {
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      clearTimeout(ttfb);
+      res.writeHead(413, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: `request body exceeds ${MAX_BODY_BYTES} bytes` }));
+      return;
+    }
     const path = req.url.startsWith("/") ? req.url : `/${req.url}`;
     const target = `${UPSTREAM}${path}`;
 
@@ -38,9 +60,17 @@ const server = http.createServer(async (req, res) => {
     headers.set("user-agent", "grok-build-opencode-go-relay/1.0");
 
     const chunks = [];
+    let received = 0;
 
     if (req.method !== "GET" && req.method !== "HEAD") {
       for await (const chunk of req) {
+        received += chunk.length;
+        if (received > MAX_BODY_BYTES) {
+          clearTimeout(ttfb);
+          res.writeHead(413, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: `request body exceeds ${MAX_BODY_BYTES} bytes` }));
+          return;
+        }
         chunks.push(chunk);
       }
     }
@@ -54,7 +84,9 @@ const server = http.createServer(async (req, res) => {
       headers,
       body,
       redirect: "manual",
+      signal: controller.signal,
     });
+    clearTimeout(ttfb);
 
     console.log(`Upstream status: ${upstream.status}`);
 
@@ -81,6 +113,7 @@ const server = http.createServer(async (req, res) => {
       res.end();
     }
   } catch (err) {
+    clearTimeout(ttfb);
     console.error(err);
 
     res.writeHead(502, {

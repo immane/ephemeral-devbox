@@ -40,6 +40,15 @@ rm -f /etc/systemd/system/opencode-web.service
 rm -f /etc/systemd/system/opencode-go-relay.service
 rm -f /usr/local/bin/opencode-go-relay.mjs
 rm -f /etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf
+log 'Restoring original apt sources...'
+restored=false
+for backup in /etc/apt/sources.list.orig.ephemeral-devbox /etc/apt/sources.list.d/*.orig.ephemeral-devbox; do
+  [[ -e "$backup" ]] || continue
+  mv -f "$backup" "${backup%.orig.ephemeral-devbox}"
+  log "Restored ${backup%.orig.ephemeral-devbox}"
+  restored=true
+done
+[[ "$restored" == true ]] || log 'No apt backups to restore.'
 systemctl daemon-reload
 systemctl restart systemd-resolved 2>/dev/null || true
 
