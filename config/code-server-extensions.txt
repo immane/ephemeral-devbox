@@ -1,4 +1,6 @@
-# One code-server extension ID per line.
-hidenobunagai.opencode-go-provider
+# One code-server extension ID or VSIX URL per line.
+# hidenobunagai.opencode-go-provider was removed from OpenVSX (404), so install
+# it from the Microsoft Marketplace VSIX until it returns to OpenVSX.
+https://marketplace.visualstudio.com/_apis/public/gallery/publishers/HidenobuNagai/vsextensions/opencode-go-provider/latest/vspackage
 pkief.material-icon-theme
 vscodevim.vim

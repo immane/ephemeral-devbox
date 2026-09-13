@@ -63,7 +63,7 @@ chmod +x bootstrap.sh reset-local.sh
 
 When Tailscale is disconnected, bootstrap uses `tailscale up --reset` before authenticating. This only clears stale local `tailscale up` flags left by a failed prior attempt; an already connected node is not re-registered.
 
-Before starting code-server, bootstrap restores the tracked editor settings and keybindings, then installs each extension listed in `config/code-server-extensions.txt`. Existing extensions are skipped. To add an extension, append its marketplace ID on a new line and rerun bootstrap.
+Before starting code-server, bootstrap restores the tracked editor settings and keybindings, then installs each extension listed in `config/code-server-extensions.txt`. Existing extensions are skipped and a single failed install only warns and continues. To add an extension, append its marketplace ID or VSIX URL on a new line and rerun bootstrap.
 
 ## Secrets
 

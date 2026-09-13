@@ -129,16 +129,31 @@ restore_code_server_customizations() {
   install -m 600 "$PROJECT_DIR/config/code-server-settings.json.template" "$CODE_SERVER_USER_DIR/settings.json"
   install -m 600 "$PROJECT_DIR/config/code-server-keybindings.json.template" "$CODE_SERVER_USER_DIR/keybindings.json"
 
-  local installed extension
+  local installed extension tmp_vsix
   installed=$(code-server --list-extensions 2>/dev/null || true)
   while IFS= read -r extension || [[ -n "$extension" ]]; do
+    extension="${extension%$'\r'}"
     [[ -z "$extension" || "$extension" == \#* ]] && continue
+    if [[ "$extension" == http://* || "$extension" == https://* ]]; then
+      log "Installing code-server extension from VSIX URL: $extension"
+      tmp_vsix="$(mktemp --suffix=.vsix)"
+      if curl -fSL -o "$tmp_vsix" "$extension" && code-server --install-extension "$tmp_vsix"; then
+        log "Installed code-server extension from VSIX URL: $extension"
+      else
+        warn "Failed to install code-server extension from VSIX URL: $extension (skipping)"
+      fi
+      rm -f "$tmp_vsix"
+      continue
+    fi
     if [[ $'\n'"$installed"$'\n' == *$'\n'"$extension"$'\n'* ]]; then
       log "code-server extension already installed: $extension"
       continue
     fi
     log "Installing code-server extension: $extension"
-    code-server --install-extension "$extension"
+    if ! code-server --install-extension "$extension"; then
+      warn "Failed to install code-server extension: $extension (skipping)"
+      continue
+    fi
     installed+=$'\n'"$extension"
   done < "$PROJECT_DIR/config/code-server-extensions.txt"
 }
