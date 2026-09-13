@@ -373,6 +373,11 @@ PY
 
 restore_code_server_customizations() {
   CURRENT_STAGE="restoring code-server customizations"
+  # code-server creates extensions, Machine, and logs as siblings of User.
+  # Take ownership of the complete local-data tree to recover cleanly from a
+  # previous root-owned code-server installation.
+  install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$DEVBOX_HOME/.local/share/code-server"
+  chown -R "$DEVBOX_USER:$DEVBOX_USER" "$DEVBOX_HOME/.local"
   install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$CODE_SERVER_USER_DIR"
   install -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 600 "$PROJECT_DIR/config/code-server-settings.json.template" "$CODE_SERVER_USER_DIR/settings.json"
   install -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 600 "$PROJECT_DIR/config/code-server-keybindings.json.template" "$CODE_SERVER_USER_DIR/keybindings.json"
@@ -489,15 +494,15 @@ PY
 write_opencode_service() {
   CURRENT_STAGE="creating OpenCode Web service"
   install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 755 "$WORKSPACE"
-  OPENCODE_BINARY="$OPENCODE_BINARY" WORKSPACE="$WORKSPACE" OPENCODE_WEB_ENV="$OPENCODE_WEB_ENV" python3 - "$PROJECT_DIR/config/opencode-web.service.template" "$OPENCODE_SERVICE" <<'PY'
+  SERVICE_OPENCODE_BINARY="$OPENCODE_BINARY" SERVICE_WORKSPACE="$WORKSPACE" SERVICE_OPENCODE_WEB_ENV="$OPENCODE_WEB_ENV" python3 - "$PROJECT_DIR/config/opencode-web.service.template" "$OPENCODE_SERVICE" <<'PY'
 import os
 import sys
 from pathlib import Path
 
 template = Path(sys.argv[1]).read_text()
-binary = os.environ["OPENCODE_BINARY"]
-workspace = os.environ["WORKSPACE"]
-web_env = os.environ["OPENCODE_WEB_ENV"]
+binary = os.environ["SERVICE_OPENCODE_BINARY"]
+workspace = os.environ["SERVICE_WORKSPACE"]
+web_env = os.environ["SERVICE_OPENCODE_WEB_ENV"]
 if "__OPENCODE_BINARY__" not in template or "__WORKSPACE__" not in template or "__OPENCODE_WEB_ENV__" not in template:
     raise SystemExit("OpenCode service template placeholder is missing")
 Path(sys.argv[2]).write_text(
