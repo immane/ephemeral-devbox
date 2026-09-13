@@ -59,6 +59,9 @@ configure_external_dns() {
 
 install_tailscale() {
   CURRENT_STAGE="installing Tailscale"
+  # Installs the binary and enables the daemon only; `tailscale up` is
+  # deferred to the end of bootstrap (see main) to avoid conflicting with
+  # the Alibaba Cloud VPC intranet while earlier steps still need it.
   if ! command -v tailscale >/dev/null 2>&1; then
     curl -fsSL https://tailscale.com/install.sh | sh
   fi
@@ -368,30 +371,32 @@ EOF
 
 main() {
   require_root_and_supported_os
-  log '[1/11] Installing packages'
+  log '[1/10] Installing packages'
   install_packages
-  log '[2/11] Configuring external service DNS'
+  log '[2/10] Configuring external service DNS'
   configure_external_dns
-  log '[3/11] Installing Tailscale'
+  log '[3/10] Installing Tailscale (binary only; connection deferred to the end)'
   install_tailscale
-  log '[4/11] Connecting Tailscale'
-  connect_tailscale
-  log '[5/11] Installing and configuring code-server'
+  log '[4/10] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[6/11] Installing OpenCode'
+  log '[5/10] Installing OpenCode'
   install_opencode
-  log '[7/11] Configuring OpenCode'
+  log '[6/10] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[8/11] Starting OpenCode Web'
+  log '[7/10] Starting OpenCode Web'
   write_opencode_service
-  log '[9/11] Configuring Tailscale Serve'
-  configure_tailscale_serve
-  log '[10/11] Configuring Git SSH'
+  log '[8/10] Configuring Git SSH and preparing workspace'
   configure_git_ssh
-  log '[11/11] Preparing workspace and verifying services'
   prepare_workspace
+  # Connect Tailscale as late as possible: once connected, Tailscale routes
+  # conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH
+  # session, so all intranet-dependent work above must finish first.
+  log '[9/10] Connecting Tailscale'
+  connect_tailscale
+  log '[10/10] Configuring Tailscale Serve and verifying services'
+  configure_tailscale_serve
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
   systemctl is-active --quiet code-server@root

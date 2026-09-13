@@ -59,7 +59,7 @@ Make scripts executable after a fresh clone if Git did not preserve their mode:
 chmod +x bootstrap.sh reset-local.sh
 ```
 
-`bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, and OpenCode. It writes root-only code-server and OpenCode configurations, starts both services, and creates two persistent Tailscale Serve routes. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
+`bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, and OpenCode. It writes root-only code-server and OpenCode configurations, starts both services, clones the workspace, and only then connects Tailscale and creates two persistent Tailscale Serve routes. Tailscale connection is deliberately deferred to the end because its routes conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH session; all intranet-dependent work (apt mirrors, Git SSH, workspace clone) finishes first. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
 
 When Tailscale is disconnected, bootstrap uses `tailscale up --reset` before authenticating. This only clears stale local `tailscale up` flags left by a failed prior attempt; an already connected node is not re-registered.
 
