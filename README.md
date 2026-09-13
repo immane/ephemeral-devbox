@@ -57,8 +57,40 @@ sudo -E ./bootstrap.sh
 Make scripts executable after a fresh clone if Git did not preserve their mode:
 
 ```bash
-chmod +x bootstrap.sh reset-local.sh
+chmod +x bootstrap.sh reset-local.sh remote-install.sh
 ```
+
+## Remote Install Without Cloning
+
+On a fresh ECS, a single command fetches this repository and runs bootstrap without a manual clone:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+```
+
+`remote-install.sh` installs git when missing, clones (or fast-forwards) the repository to `/root/ephemeral-devbox`, checks out the ref, refuses to overwrite a non-Git directory, requires `secrets.env`, and then execs `bootstrap.sh`. Two ways to provide secrets (pick one):
+
+```bash
+# Option A: stage the file before cloning (it is kept across the clone, mode 600)
+mkdir -p /root/ephemeral-devbox
+scp secrets.env root@<host>:/root/ephemeral-devbox/secrets.env
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+
+# Option B: source locally-prepared values so the environment carries them
+source secrets.env
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote-install.sh | sudo -E bash
+```
+
+Option B works because `bootstrap.sh` automatically sources `secrets.env` when present and otherwise falls back to the inherited environment (`sudo -E` preserves it).
+
+Pin a reviewed version for reproducibility instead of tracking `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/<tag-or-sha>/remote-install.sh | sudo -E bash
+EPHEMERAL_DEVBOX_REF=<tag-or-sha> curl -fsSL .../main/remote-install.sh | sudo -E bash
+```
+
+`EPHEMERAL_DEVBOX_REPO`, `EPHEMERAL_DEVBOX_REF` (branch, tag, or commit SHA), and `EPHEMERAL_DEVBOX_DIR` override the defaults. Piping to bash trusts that ref tip on first use; prefer a tag or SHA you have reviewed.
 
 `bootstrap.sh` installs apt packages, Docker, Tailscale, code-server, OpenCode, and Grok Build. It writes root-only code-server and OpenCode configurations, starts both services, installs Grok Build with a relay-backed model pointing at a local OpenCode Go relay (`http://127.0.0.1:8787`, systemd service `opencode-go-relay`), clones the workspace, then switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then connects Tailscale and creates two persistent Tailscale Serve routes. The mirror switch must happen before Tailscale connects because its routes conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH session while also making the intranet apt mirror unreachable; all intranet-dependent work (apt mirrors, Git SSH, workspace clone) finishes first. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Following the Tsinghua mirror guidance, normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
 
