@@ -578,12 +578,32 @@ configure_git_ssh() {
   CURRENT_STAGE="configuring Git SSH"
   [[ -n "${GIT_SSH_PRIVATE_KEY:-}" ]] || return 0
   install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$DEVBOX_SSH_DIR"
-  if [[ ! -e "$DEVBOX_SSH_DIR/id_ed25519" ]]; then
-    (umask 077; printf '%s\n' "$GIT_SSH_PRIVATE_KEY" > "$DEVBOX_SSH_DIR/id_ed25519")
-    chown "$DEVBOX_USER:$DEVBOX_USER" "$DEVBOX_SSH_DIR/id_ed25519"
-    chmod 600 "$DEVBOX_SSH_DIR/id_ed25519"
+  local private_key="$DEVBOX_SSH_DIR/id_ed25519"
+  if [[ -e "$private_key" ]] && ! ssh-keygen -y -f "$private_key" </dev/null >/dev/null 2>&1; then
+    local invalid_backup="$private_key.invalid-$(date +%s)"
+    mv "$private_key" "$invalid_backup"
+    warn "Backed up invalid existing Git SSH key to $invalid_backup."
+  fi
+  if [[ ! -e "$private_key" ]]; then
+    GIT_SSH_PRIVATE_KEY="$GIT_SSH_PRIVATE_KEY" python3 - "$private_key" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+key = os.environ["GIT_SSH_PRIVATE_KEY"].replace("\r\n", "\n").replace("\r", "\n")
+# dotenv-style values are sometimes pasted as one line with literal \n escapes.
+if "\n" not in key and r"\n" in key:
+    key = key.replace(r"\n", "\n")
+first_line = key.split("\n", 1)[0]
+if not (first_line.startswith("-----BEGIN ") and first_line.endswith(" PRIVATE KEY-----")):
+    raise SystemExit("GIT_SSH_PRIVATE_KEY must contain a PEM or OpenSSH private key")
+Path(sys.argv[1]).write_text(key.rstrip("\n") + "\n")
+PY
+    chown "$DEVBOX_USER:$DEVBOX_USER" "$private_key"
+    chmod 600 "$private_key"
+    ssh-keygen -y -f "$private_key" </dev/null >/dev/null 2>&1 || fail 'GIT_SSH_PRIVATE_KEY is invalid, encrypted, or cannot be read by OpenSSH.'
   else
-    warn "Keeping existing $DEVBOX_SSH_DIR/id_ed25519; it was not overwritten."
+    log "Keeping valid existing $private_key; it was not overwritten."
   fi
 
   touch "$DEVBOX_SSH_DIR/known_hosts"

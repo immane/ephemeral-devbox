@@ -136,7 +136,7 @@ export FIRECRAWL_API_KEY=''
 - `CODE_SERVER_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect code-server with its built-in password prompt.
 - `OPENCODE_GO_KEY` is required. It is also reused as the API key for the relay-backed model in the Grok configuration.
 - `OPENCODE_WEB_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect OpenCode Web with HTTP Basic Auth. `OPENCODE_WEB_USERNAME` defaults to `opencode`. When enabled, credentials are stored in an owner-only environment file, never in the systemd unit.
-- `GIT_SSH_PRIVATE_KEY` is optional. When supplied and `/home/devbox/.ssh/id_ed25519` does not already exist, it is written with restrictive permissions. Existing keys are never overwritten.
+- `GIT_SSH_PRIVATE_KEY` is optional. It must be an unencrypted PEM or OpenSSH private key. Bootstrap normalizes CRLF and one-line literal `\n` values, validates it with `ssh-keygen`, and writes it to `/home/devbox/.ssh/id_ed25519` with restrictive permissions. A malformed existing key is backed up as `id_ed25519.invalid-<timestamp>` and replaced; a valid existing key is retained.
 - `GIT_REPO` is optional. When it is set, the repository is cloned to `/home/devbox/workspace`; an existing checkout is left unchanged.
 - `GITHUB_PERSONAL_ACCESS_TOKEN`, `E2B_API_KEY`, and `FIRECRAWL_API_KEY` are optional credentials for the retained GitHub, E2B, and Firecrawl MCP servers.
 - `TAILSCALE_INSTALL_SHA256`, `CODE_SERVER_INSTALL_SHA256`, `OPENCODE_INSTALL_SHA256`, and `GROK_INSTALL_SHA256` are optional installer pins. When set, bootstrap verifies the downloaded installer SHA256 before running it; when unset, the hash is logged and the installer runs unverified.
@@ -199,5 +199,5 @@ It stops code-server, OpenCode Web, and the OpenCode Go relay, clears the `devbo
 | OpenCode Web unavailable | Run `systemctl status opencode-web`; `journalctl -u opencode-web -e` shows runtime errors without exposing config values. |
 | OpenCode Go relay unavailable | Run `systemctl status opencode-go-relay`; `journalctl -u opencode-go-relay -e` shows relay errors. Confirm node is installed and port 8787 is listening with `ss -ltnp | grep 8787`. |
 | Grok model call fails | Confirm the relay is running and `/home/devbox/.grok/config.toml` points at `http://127.0.0.1:8787/v1`. Test the relay directly with `curl http://127.0.0.1:8787/v1/models`. |
-| Git SSH clone fails | Confirm the private key at `/home/devbox/.ssh/id_ed25519` can access the repository and that `ssh-keyscan` completed. Test as the service user: `sudo -u devbox ssh -T git@github.com` or `sudo -u devbox ssh -T git@gitee.com`. |
+| Git SSH clone fails | Check `sudo -u devbox ssh-keygen -y -f /home/devbox/.ssh/id_ed25519`; if it fails, inspect any `id_ed25519.invalid-*` backup and correct `GIT_SSH_PRIVATE_KEY`. Then confirm repository access as the service user: `sudo -u devbox ssh -T git@github.com` or `sudo -u devbox ssh -T git@gitee.com`. |
 | Bootstrap refuses workspace | Move or remove the non-Git `/home/devbox/workspace` directory rather than allowing the script to overwrite files. |
