@@ -4,6 +4,8 @@
   "editor.minimap.enabled": false,
   "window.menuBarVisibility": "classic",
   "window.commandCenter": false,
+  "terminal.integrated.enableImages": true,
+  "terminal.integrated.gpuAcceleration": "auto",
 
   /*
   "terminal.integrated.lineHeight": 1,

@@ -82,7 +82,10 @@ install_packages() {
   CURRENT_STAGE="installing apt packages"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y curl git vim tmux jq ca-certificates openssh-client docker.io npm nodejs
+  # kitty provides the `kitty +kitten icat` graphics protocol so terminal
+  # image output (e.g. from AI tools) renders in clients that support it,
+  # paired with terminal.integrated.enableImages in code-server settings.
+  apt-get install -y curl git vim tmux jq ca-certificates openssh-client docker.io npm nodejs kitty
   systemctl enable --now docker
 }
 
