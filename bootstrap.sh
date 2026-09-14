@@ -539,7 +539,11 @@ write_grok_config() {
   CURRENT_STAGE="writing Grok configuration"
   require_value OPENCODE_GO_KEY
   install -d -o "$DEVBOX_USER" -g "$DEVBOX_USER" -m 700 "$GROK_CONFIG_DIR"
-  OPENCODE_GO_KEY="$OPENCODE_GO_KEY" python3 - "$PROJECT_DIR/config/grok-config.toml.template" "$GROK_CONFIG_DIR/config.toml" <<'PY'
+  OPENCODE_GO_KEY="$OPENCODE_GO_KEY" \
+  GITHUB_PERSONAL_ACCESS_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:-}" \
+  E2B_API_KEY="${E2B_API_KEY:-}" \
+  FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}" \
+  python3 - "$PROJECT_DIR/config/grok-config.toml.template" "$GROK_CONFIG_DIR/config.toml" <<'PY'
 import os
 import sys
 import json
@@ -551,7 +555,19 @@ if "\n" in key or "\r" in key:
     raise SystemExit("OPENCODE_GO_KEY must not contain a newline")
 if "__OPENCODE_GO_KEY_JSON__" not in template:
     raise SystemExit("Grok config template placeholder is missing")
-Path(sys.argv[2]).write_text(template.replace("__OPENCODE_GO_KEY_JSON__", json.dumps(key)))
+replacements = {
+    "__OPENCODE_GO_KEY_JSON__": json.dumps(key),
+    "__GITHUB_PERSONAL_ACCESS_TOKEN_JSON__": json.dumps(os.environ["GITHUB_PERSONAL_ACCESS_TOKEN"]),
+    "__E2B_API_KEY_JSON__": json.dumps(os.environ["E2B_API_KEY"]),
+    "__FIRECRAWL_API_KEY_JSON__": json.dumps(os.environ["FIRECRAWL_API_KEY"]),
+}
+for placeholder, value in replacements.items():
+    if placeholder not in template:
+        raise SystemExit(f"Grok config template placeholder is missing: {placeholder}")
+    if "\n" in value or "\r" in value:
+        raise SystemExit(f"{placeholder} replacement must not contain a newline")
+    template = template.replace(placeholder, value)
+Path(sys.argv[2]).write_text(template)
 PY
   chown "$DEVBOX_USER:$DEVBOX_USER" "$GROK_CONFIG_DIR/config.toml"
   chmod 600 "$GROK_CONFIG_DIR/config.toml"

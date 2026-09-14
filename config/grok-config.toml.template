@@ -30,3 +30,60 @@ permission_mode = "ask"
 
 [features]
 terminal_theme = true
+
+# MCP servers mirrored from config/opencode.json.template so Grok has the
+# same tools as OpenCode. The relay on 127.0.0.1:8787 only proxies LLM
+# inference and never forwards MCP tools, so they must be declared here.
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+startup_timeout_sec = 120
+
+[mcp_servers.obsidian]
+command = "npx"
+args = ["-y", "@bitbonsai/mcpvault@latest", "."]
+startup_timeout_sec = 120
+
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = __GITHUB_PERSONAL_ACCESS_TOKEN_JSON__ }
+startup_timeout_sec = 120
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+startup_timeout_sec = 120
+
+[mcp_servers.agentmemory]
+command = "npx"
+args = ["-y", "@agentmemory/mcp"]
+startup_timeout_sec = 120
+
+[mcp_servers.duckduckgo]
+command = "npx"
+args = ["-y", "duckduckgo-websearch"]
+env = { NODE_OPTIONS = "--use-env-proxy" }
+startup_timeout_sec = 120
+
+[mcp_servers.e2b-sandbox]
+command = "npx"
+args = ["-y", "@e2b/mcp-server"]
+env = { E2B_API_KEY = __E2B_API_KEY_JSON__ }
+startup_timeout_sec = 120
+
+[mcp_servers.firecrawl]
+command = "npx"
+args = ["-y", "firecrawl-mcp"]
+env = { FIRECRAWL_API_KEY = __FIRECRAWL_API_KEY_JSON__ }
+startup_timeout_sec = 120
+
+[mcp_servers.playwright-browser]
+command = "npx"
+args = ["-y", "@playwright/mcp@latest"]
+startup_timeout_sec = 120
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+startup_timeout_sec = 120
