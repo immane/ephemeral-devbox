@@ -1,0 +1,12 @@
+[Unit]
+Description=Ephemeral Devbox Tailscale reconnect (re-register released node)
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/ephemeral-devbox/tailscale-auth.env
+ExecStart=/usr/local/sbin/ephemeral-devbox-tailscale-reconnect
+
+[Install]
+WantedBy=multi-user.target

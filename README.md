@@ -54,7 +54,7 @@ Both web services bind only to loopback. Tailscale Serve publishes them only ins
 
 After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes Tailscale, code-server, OpenCode, xAI (`x.ai`, plus the installer fallback `storage.googleapis.com`), GitHub, npm, Tsinghua mirror (`mirrors.tuna.tsinghua.edu.cn`), and Ubuntu security (`security.ubuntu.com`) domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers during the initial install.
 
-The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed. A normal reboot retains this ECS's local Tailscale state and reconnects automatically without registering a new node.
+The node hostname is always `ephemeral-devbox`. Create a reusable, ephemeral Tailscale auth key with a 90-day expiration. Each newly created ECS registers as a new ephemeral node and can be deleted when the ECS is destroyed. A normal reboot retains this ECS's local Tailscale state and reconnects automatically without registering a new node. If the previous registration was released, deleted, or expired while the machine was off, bootstrap persists the auth key to `/etc/ephemeral-devbox/tailscale-auth.env` (mode `600`, `root:root`) and installs the `ephemeral-devbox-tailscale-reconnect` service (runs at boot) plus timer (1 minute after boot, then every 5 minutes) to re-register as `ephemeral-devbox` and recreate the Serve routes automatically.
 
 ## Persistent Data
 
@@ -131,7 +131,7 @@ export FIRECRAWL_API_KEY=''
 # export GROK_VERSION=''
 ```
 
-- `TS_AUTHKEY` is required only when the node is not already logged in to Tailscale.
+- `TS_AUTHKEY` is required only when the node is not already logged in to Tailscale. When provided, it is also persisted to `/etc/ephemeral-devbox/tailscale-auth.env` (mode `600`) so the boot/timer healing service can re-register the node after the previous registration was released, deleted, or expired. Rerunning bootstrap without it keeps the existing persisted key.
 - `TS_TAGS` is optional. It is passed as `--advertise-tags` when set.
 - `CODE_SERVER_PASSWORD` is optional. Leave it empty to rely on tailnet-only access; set it to additionally protect code-server with its built-in password prompt.
 - `OPENCODE_GO_KEY` is required. It is also reused as the API key for the relay-backed model in the Grok configuration.
@@ -176,7 +176,7 @@ Use an SSH key, ACLs, and Tailscale SSH according to your tailnet policy. This p
 4. Create a new Ubuntu ECS when needed.
 5. Repeat the bootstrap procedure with the same safely stored secrets.
 
-Do not retain a custom image or a large snapshot. If you skip `tailscale logout`, the old ephemeral node is only removed after it goes offline, subject to Tailscale's normal cleanup timing; a stale `ephemeral-devbox` entry can force the replacement to use a suffixed hostname. A normal reboot does not need logout: the same ECS keeps its local Tailscale state and reconnects automatically.
+Do not retain a custom image or a large snapshot. If you skip `tailscale logout`, the old ephemeral node is only removed after it goes offline, subject to Tailscale's normal cleanup timing; a stale `ephemeral-devbox` entry can force the replacement to use a suffixed hostname. A normal reboot does not need logout: the same ECS keeps its local Tailscale state and reconnects automatically. If the old node was already gone, the reconnect service/timer re-registers it on boot (and retries every 5 minutes) as long as the persisted key is still valid; check with `systemctl status ephemeral-devbox-tailscale-reconnect.service` and `systemctl status ephemeral-devbox-tailscale-reconnect.timer`.
 
 ## Local Reset Testing
 
@@ -193,7 +193,7 @@ It stops code-server, OpenCode Web, and the OpenCode Go relay, clears the `devbo
 
 | Symptom | Check |
 | --- | --- |
-| Tailscale cannot connect | Confirm `TS_AUTHKEY` is valid, reusable, ephemeral, and tag-authorized. Run `systemctl status tailscaled` and `tailscale status`. |
+| Tailscale cannot connect | Confirm `TS_AUTHKEY` is valid, reusable, ephemeral, and tag-authorized. Run `systemctl status tailscaled` and `tailscale status`. If the node was released while offline, the healing unit retries automatically: `systemctl status ephemeral-devbox-tailscale-reconnect.service`, `journalctl -u ephemeral-devbox-tailscale-reconnect -e` (key never logged), and `sudo stat -c '%a %u %g' /etc/ephemeral-devbox/tailscale-auth.env` ownership/mode check (must be `600 0 0`). |
 | Serve URL does not work | Confirm MagicDNS/HTTPS access and run `tailscale serve status`. Check tailnet ACLs. |
 | code-server unavailable | Run `systemctl status code-server@devbox` and inspect `/home/devbox/.config/code-server/config.yaml` permissions. |
 | OpenCode Web unavailable | Run `systemctl status opencode-web`; `journalctl -u opencode-web -e` shows runtime errors without exposing config values. |

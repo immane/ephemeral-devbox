@@ -68,5 +68,6 @@ cat <<'EOF'
 Local reset completed.
 
 Not removed: installed apt packages, Docker, Tailscale login/state, Tailscale account/auth keys,
+Tailscale reconnect service/timer and /etc/ephemeral-devbox/tailscale-auth.env,
 SSH keys, remote Git repositories, ECS resources, cloud disks, or security groups.
 EOF

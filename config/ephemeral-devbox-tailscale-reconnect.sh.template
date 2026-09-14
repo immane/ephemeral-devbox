@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Reconnect Tailscale when the previous node was released/deleted/expired.
+# Runs at boot (via the .service) and periodically (via the .timer).
+# - BackendState == Running -> exit 0 without touching anything (serve rules
+#   left alone so `reset-local.sh` state is not resurrected by the timer).
+# - Otherwise -> `tailscale up --reset` with the persisted auth key, then
+#   recreate this host's exclusive Serve routes.
+# The auth key file is root-only (600); never echo it to logs.
+set -Euo pipefail
+
+AUTH_ENV="/etc/ephemeral-devbox/tailscale-auth.env"
+
+log() { printf '%s\n' "$*"; }
+
+tailscale_connected() {
+  tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null
+}
+
+# Load persisted key without executing arbitrary code paths: the file is
+# written by bootstrap.sh as simple VAR="value" lines.
+if [[ -f "$AUTH_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AUTH_ENV"
+  set +a
+fi
+
+if tailscale_connected; then
+  log 'ephemeral-devbox-tailscale-reconnect: Tailscale already Running; nothing to do.'
+  exit 0
+fi
+
+if [[ -z "${TS_AUTHKEY:-}" ]]; then
+  log 'ephemeral-devbox-tailscale-reconnect: Tailscale not Running and no TS_AUTHKEY in '"$AUTH_ENV"'; skipping (rerun bootstrap.sh with a valid reusable ephemeral key).'
+  exit 0
+fi
+
+log 'ephemeral-devbox-tailscale-reconnect: Tailscale not Running; re-authenticating as ephemeral-devbox.'
+systemctl start tailscaled 2>/dev/null || systemctl restart tailscaled 2>/dev/null || true
+
+up_args=(up --reset --auth-key="$TS_AUTHKEY" --hostname=ephemeral-devbox)
+if [[ -n "${TS_TAGS:-}" ]]; then
+  up_args+=(--advertise-tags="$TS_TAGS")
+fi
+if ! tailscale "${up_args[@]}"; then
+  log 'ephemeral-devbox-tailscale-reconnect: tailscale up failed; will retry on next timer run.'
+  exit 1
+fi
+
+if ! tailscale_connected; then
+  log 'ephemeral-devbox-tailscale-reconnect: Tailscale did not reach Running; will retry on next timer run.'
+  exit 1
+fi
+
+# A fresh registration loses Serve rules, and this host owns them exclusively.
+tailscale serve reset
+tailscale serve --https=443 --bg --yes http://127.0.0.1:8080
+tailscale serve --https=8443 --bg --yes http://127.0.0.1:4096
+tailscale serve status --json >/dev/null
+log 'ephemeral-devbox-tailscale-reconnect: re-authenticated and Serve routes recreated.'

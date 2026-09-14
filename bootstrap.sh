@@ -14,6 +14,10 @@ readonly OPENCODE_CONFIG_DIR="$DEVBOX_HOME/.config/opencode"
 readonly OPENCODE_WEB_ENV="$OPENCODE_CONFIG_DIR/web.env"
 readonly RELAY_SCRIPT="/usr/local/bin/opencode-go-relay.mjs"
 readonly RELAY_SERVICE="/etc/systemd/system/opencode-go-relay.service"
+readonly TAILSCALE_AUTH_ENV="/etc/ephemeral-devbox/tailscale-auth.env"
+readonly TAILSCALE_RECONNECT_SCRIPT="/usr/local/sbin/ephemeral-devbox-tailscale-reconnect"
+readonly TAILSCALE_RECONNECT_SERVICE="/etc/systemd/system/ephemeral-devbox-tailscale-reconnect.service"
+readonly TAILSCALE_RECONNECT_TIMER="/etc/systemd/system/ephemeral-devbox-tailscale-reconnect.timer"
 readonly WORKSPACE="$DEVBOX_HOME/workspace"
 readonly OPENCODE_SERVICE="/etc/systemd/system/opencode-web.service"
 CURRENT_STAGE="startup"
@@ -333,6 +337,57 @@ connect_tailscale() {
   fi
   tailscale "${up_args[@]}"
   tailscale_connected || fail 'Tailscale did not reach the Running state.'
+}
+
+write_tailscale_auth_env() {
+  CURRENT_STAGE="persisting Tailscale auth key"
+  # Persisted root-only so boot/timer healing can re-register the node after
+  # the previous registration was released, deleted, or expired. Accepted by
+  # the user as plaintext on disk (mode 600, root:root).
+  if [[ -n "${TS_AUTHKEY:-}" ]]; then
+    install -d -m 700 "$(dirname "$TAILSCALE_AUTH_ENV")"
+    TS_AUTHKEY="$TS_AUTHKEY" TS_TAGS="${TS_TAGS:-}" python3 - "$TAILSCALE_AUTH_ENV" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+def quote(value):
+    if "\n" in value or "\r" in value:
+        raise SystemExit("Tailscale auth values must not contain a newline")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+content = "\n".join((
+    "TS_AUTHKEY=" + quote(os.environ["TS_AUTHKEY"]),
+    "TS_TAGS=" + quote(os.environ.get("TS_TAGS", "")),
+    "",
+))
+Path(sys.argv[1]).write_text(content)
+PY
+    chown root:root "$TAILSCALE_AUTH_ENV"
+    chmod 600 "$TAILSCALE_AUTH_ENV"
+    log "Persisted Tailscale auth key to $TAILSCALE_AUTH_ENV (mode 600) for boot/timer healing."
+  elif [[ -f "$TAILSCALE_AUTH_ENV" ]]; then
+    log "TS_AUTHKEY is unset; keeping existing $TAILSCALE_AUTH_ENV for boot/timer healing."
+  else
+    warn "TS_AUTHKEY is unset and $TAILSCALE_AUTH_ENV does not exist; boot/timer healing stays disabled until bootstrap runs with a valid reusable ephemeral key."
+  fi
+}
+
+install_tailscale_reconnect() {
+  CURRENT_STAGE="installing Tailscale reconnect service"
+  install -m 755 "$PROJECT_DIR/config/ephemeral-devbox-tailscale-reconnect.sh.template" "$TAILSCALE_RECONNECT_SCRIPT"
+  bash -n "$TAILSCALE_RECONNECT_SCRIPT"
+  install -m 644 "$PROJECT_DIR/config/ephemeral-devbox-tailscale-reconnect.service.template" "$TAILSCALE_RECONNECT_SERVICE"
+  install -m 644 "$PROJECT_DIR/config/ephemeral-devbox-tailscale-reconnect.timer.template" "$TAILSCALE_RECONNECT_TIMER"
+  systemctl daemon-reload
+  # The service runs once at boot; the timer heals a released/deleted/expired
+  # node both shortly after boot and every few minutes afterwards. The service
+  # is enabled but not started here to avoid re-running Serve setup that just
+  # completed above; the timer is started immediately.
+  systemctl enable "$TAILSCALE_RECONNECT_SERVICE"
+  systemctl enable --now "$TAILSCALE_RECONNECT_TIMER"
+  systemctl is-enabled --quiet "$TAILSCALE_RECONNECT_SERVICE"
+  systemctl is-enabled --quiet "$TAILSCALE_RECONNECT_TIMER"
 }
 
 install_code_server() {
@@ -721,43 +776,46 @@ EOF
 main() {
   load_secrets_env
   require_root_and_supported_os
-  log '[1/13] Installing packages'
+  log '[1/14] Installing packages'
   install_packages
-  log '[2/13] Creating service user'
+  log '[2/14] Creating service user'
   ensure_devbox_user
-  log '[3/13] Configuring external service DNS'
+  log '[3/14] Configuring external service DNS'
   configure_external_dns
-  log '[4/13] Installing Tailscale (connection deferred to the end)'
+  log '[4/14] Installing Tailscale (connection deferred to the end)'
   install_tailscale
-  log '[5/13] Installing and configuring code-server'
+  log '[5/14] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[6/13] Installing OpenCode'
+  log '[6/14] Installing OpenCode'
   install_opencode
-  log '[7/13] Configuring OpenCode'
+  log '[7/14] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[8/13] Starting OpenCode Web'
+  log '[8/14] Starting OpenCode Web'
   write_opencode_service
-  log '[9/13] Installing Grok Build and starting OpenCode Go relay'
+  log '[9/14] Installing Grok Build and starting OpenCode Go relay'
   install_grok
   write_grok_config
   write_opencode_go_relay
-  log '[10/13] Configuring Git SSH and preparing workspace'
+  log '[10/14] Configuring Git SSH and preparing workspace'
   configure_git_ssh
   prepare_workspace
   # Switch apt to public mirrors before connecting Tailscale: once connected,
   # Tailscale routes conflict with the Alibaba Cloud VPC intranet, dropping
   # intranet SSH and making the intranet apt mirror unreachable.
-  log '[11/13] Switching apt sources to Tsinghua mirrors'
+  log '[11/14] Switching apt sources to Tsinghua mirrors'
   switch_apt_to_tsinghua
   # Connect Tailscale as late as possible: once connected, Tailscale routes
   # conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH
   # session, so all intranet-dependent work above must finish first.
-  log '[12/13] Connecting Tailscale'
+  log '[12/14] Connecting Tailscale'
+  write_tailscale_auth_env
   connect_tailscale
-  log '[13/13] Configuring Tailscale Serve and verifying services'
+  log '[13/14] Configuring Tailscale Serve and verifying services'
   configure_tailscale_serve
+  log '[14/14] Installing Tailscale boot/timer healing'
+  install_tailscale_reconnect
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
   systemctl is-active --quiet "code-server@$DEVBOX_USER"
