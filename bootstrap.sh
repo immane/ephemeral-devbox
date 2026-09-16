@@ -8,6 +8,8 @@ readonly DEVBOX_HOME="/home/$DEVBOX_USER"
 readonly DEVBOX_SSH_DIR="$DEVBOX_HOME/.ssh"
 readonly CODE_SERVER_CONFIG_DIR="$DEVBOX_HOME/.config/code-server"
 readonly CODE_SERVER_USER_DIR="$DEVBOX_HOME/.local/share/code-server/User"
+readonly CODE_SERVER_PWA_DIR="/opt/code-server-pwa"
+readonly CODE_SERVER_PWA_NGINX_CONFIG="/etc/nginx/sites-available/code-server-pwa"
 readonly EXTERNAL_DNS_DROP_IN="/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf"
 readonly GROK_CONFIG_DIR="$DEVBOX_HOME/.grok"
 readonly OPENCODE_CONFIG_DIR="$DEVBOX_HOME/.config/opencode"
@@ -89,7 +91,11 @@ install_packages() {
   # kitty provides the `kitty +kitten icat` graphics protocol so terminal
   # image output (e.g. from AI tools) renders in clients that support it,
   # paired with terminal.integrated.enableImages in code-server settings.
-  apt-get install -y curl git vim tmux jq ca-certificates openssh-client docker.io npm nodejs kitty
+  apt-get install -y curl git vim tmux jq ca-certificates openssh-client docker.io nginx npm nodejs kitty
+  # nginx packages enable a public port-80 default site. Stop it immediately;
+  # configure_code_server_pwa later starts the loopback-only virtual host.
+  systemctl disable --now nginx
+  rm -f /etc/nginx/sites-enabled/default
   systemctl enable --now docker
 }
 
@@ -429,6 +435,21 @@ PY
   systemctl is-active --quiet "code-server@$DEVBOX_USER"
 }
 
+configure_code_server_pwa() {
+  CURRENT_STAGE="configuring code-server PWA proxy"
+  install -d -m 755 "$CODE_SERVER_PWA_DIR"
+  install -m 644 "$PROJECT_DIR/config/code-server-manifest.webmanifest" "$CODE_SERVER_PWA_DIR/manifest.webmanifest"
+  rm -f "$CODE_SERVER_PWA_DIR/status-bar.css" "$CODE_SERVER_PWA_DIR/status-bar.js"
+  install -m 644 "$PROJECT_DIR/config/code-server-pwa.conf.template" "$CODE_SERVER_PWA_NGINX_CONFIG"
+  ln -sfn "$CODE_SERVER_PWA_NGINX_CONFIG" /etc/nginx/sites-enabled/code-server-pwa
+  # The packaged default virtual host listens publicly on port 80. This host
+  # exposes Nginx only on loopback; Tailscale Serve remains the sole ingress.
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t
+  systemctl enable --now nginx
+  systemctl is-active --quiet nginx
+}
+
 restore_code_server_customizations() {
   CURRENT_STAGE="restoring code-server customizations"
   # code-server creates extensions, Machine, and logs as siblings of User.
@@ -643,7 +664,7 @@ configure_tailscale_serve() {
   CURRENT_STAGE="configuring Tailscale Serve"
   # This machine owns Serve configuration exclusively, so reset avoids stale rules on reruns.
   tailscale serve reset
-  tailscale serve --https=443 --bg --yes http://127.0.0.1:8080
+  tailscale serve --https=443 --bg --yes http://127.0.0.1:8081
   tailscale serve --https=8443 --bg --yes http://127.0.0.1:4096
   tailscale serve status --json >/dev/null
 }
@@ -776,49 +797,52 @@ EOF
 main() {
   load_secrets_env
   require_root_and_supported_os
-  log '[1/14] Installing packages'
+  log '[1/15] Installing packages'
   install_packages
-  log '[2/14] Creating service user'
+  log '[2/15] Creating service user'
   ensure_devbox_user
-  log '[3/14] Configuring external service DNS'
+  log '[3/15] Configuring external service DNS'
   configure_external_dns
-  log '[4/14] Installing Tailscale (connection deferred to the end)'
+  log '[4/15] Installing Tailscale (connection deferred to the end)'
   install_tailscale
-  log '[5/14] Installing and configuring code-server'
+  log '[5/15] Installing and configuring code-server'
   install_code_server
   write_code_server_config
-  log '[6/14] Installing OpenCode'
+  log '[6/15] Configuring the code-server PWA proxy'
+  configure_code_server_pwa
+  log '[7/15] Installing OpenCode'
   install_opencode
-  log '[7/14] Configuring OpenCode'
+  log '[8/15] Configuring OpenCode'
   write_opencode_config
   write_opencode_web_env
-  log '[8/14] Starting OpenCode Web'
+  log '[9/15] Starting OpenCode Web'
   write_opencode_service
-  log '[9/14] Installing Grok Build and starting OpenCode Go relay'
+  log '[10/15] Installing Grok Build and starting OpenCode Go relay'
   install_grok
   write_grok_config
   write_opencode_go_relay
-  log '[10/14] Configuring Git SSH and preparing workspace'
+  log '[11/15] Configuring Git SSH and preparing workspace'
   configure_git_ssh
   prepare_workspace
   # Switch apt to public mirrors before connecting Tailscale: once connected,
   # Tailscale routes conflict with the Alibaba Cloud VPC intranet, dropping
   # intranet SSH and making the intranet apt mirror unreachable.
-  log '[11/14] Switching apt sources to Tsinghua mirrors'
+  log '[12/15] Switching apt sources to Tsinghua mirrors'
   switch_apt_to_tsinghua
   # Connect Tailscale as late as possible: once connected, Tailscale routes
   # conflict with the Alibaba Cloud VPC intranet and drop an intranet SSH
   # session, so all intranet-dependent work above must finish first.
-  log '[12/14] Connecting Tailscale'
+  log '[13/15] Connecting Tailscale'
   write_tailscale_auth_env
   connect_tailscale
-  log '[13/14] Configuring Tailscale Serve and verifying services'
+  log '[14/15] Configuring Tailscale Serve and verifying services'
   configure_tailscale_serve
-  log '[14/14] Installing Tailscale boot/timer healing'
+  log '[15/15] Installing Tailscale boot/timer healing'
   install_tailscale_reconnect
   systemctl is-active --quiet docker
   systemctl is-active --quiet tailscaled
   systemctl is-active --quiet "code-server@$DEVBOX_USER"
+  systemctl is-active --quiet nginx
   systemctl is-active --quiet opencode-web
   systemctl is-active --quiet opencode-go-relay
   print_summary

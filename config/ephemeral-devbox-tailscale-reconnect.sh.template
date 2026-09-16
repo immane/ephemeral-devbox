@@ -54,7 +54,7 @@ fi
 
 # A fresh registration loses Serve rules, and this host owns them exclusively.
 tailscale serve reset
-tailscale serve --https=443 --bg --yes http://127.0.0.1:8080
+tailscale serve --https=443 --bg --yes http://127.0.0.1:8081
 tailscale serve --https=8443 --bg --yes http://127.0.0.1:4096
 tailscale serve status --json >/dev/null
 log 'ephemeral-devbox-tailscale-reconnect: re-authenticated and Serve routes recreated.'

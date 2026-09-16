@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/immane/ephemeral-devbox/main/remote
 ```
 Tailnet device
     |
-    +-- HTTPS 443  -> Tailscale Serve -> 127.0.0.1:8080 -> code-server
+    +-- HTTPS 443  -> Tailscale Serve -> 127.0.0.1:8081 -> Nginx PWA proxy -> 127.0.0.1:8080 -> code-server
     |
     +-- HTTPS 8443 -> Tailscale Serve -> 127.0.0.1:4096 -> OpenCode Web
 
@@ -50,7 +50,7 @@ On the host itself (never exposed):
 grok CLI (devbox) -> 127.0.0.1:8787 -> OpenCode Go relay -> opencode.ai
 ```
 
-Both web services bind only to loopback. Tailscale Serve publishes them only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 4096, 8443, or 8787 to the public internet.
+Both web services bind only to loopback. Nginx also binds only to `127.0.0.1:8081`; it wraps code-server with a standalone PWA manifest, a non-translucent black status bar, and a nearly transparent full-viewport layer that suppresses the iPadOS Web App status-bar gradient. Tailscale Serve publishes the services only inside the tailnet using the node's MagicDNS name, not its `100.x` address. SSH should likewise be used through Tailscale; do not open port 22, 8080, 8081, 4096, 8443, or 8787 to the public internet.
 
 After apt packages are installed through the ECS DHCP DNS, bootstrap adds `/etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf`. It routes Tailscale, code-server, OpenCode, xAI (`x.ai`, plus the installer fallback `storage.googleapis.com`), GitHub, npm, Tsinghua mirror (`mirrors.tuna.tsinghua.edu.cn`), and Ubuntu security (`security.ubuntu.com`) domains to `1.1.1.1` and `8.8.8.8`. It deliberately does not use `Domains=~.`, so Alibaba Ubuntu mirror domains keep using the ECS `100.100.2.x` DNS servers during the initial install.
 
@@ -100,7 +100,7 @@ Make scripts executable after a fresh clone if Git did not preserve their mode:
 chmod +x bootstrap.sh reset-local.sh remote-install.sh
 ```
 
-`bootstrap.sh` installs apt packages (including `kitty` for terminal image output via `kitty +kitten icat`), Docker, Tailscale, code-server, OpenCode, and Grok Build. code-server, OpenCode Web, Grok Build, the relay, Git SSH credentials, and `/home/devbox/workspace` all run as the dedicated unprivileged `devbox` user. Grok uses a relay-backed model at `http://127.0.0.1:8787` (systemd service `opencode-go-relay`). Bootstrap stops any persisted Tailscale daemon before setup, clones the workspace, switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then starts and connects Tailscale. This preserves the Alibaba VPC connection until all intranet-dependent work finishes. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Ubuntu normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`; Debian uses Tsinghua's Debian and Debian security mirrors. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
+`bootstrap.sh` installs apt packages (including `kitty` for terminal image output via `kitty +kitten icat`), Docker, Tailscale, Nginx, code-server, OpenCode, and Grok Build. code-server, OpenCode Web, Grok Build, the relay, Git SSH credentials, and `/home/devbox/workspace` all run as the dedicated unprivileged `devbox` user. Nginx remains a root-managed loopback-only proxy that injects the standalone PWA, a non-translucent status bar, and a nearly transparent full-viewport layer to suppress the iPadOS Web App gradient; the packaged public port-80 site is disabled. Grok uses a relay-backed model at `http://127.0.0.1:8787` (systemd service `opencode-go-relay`). Bootstrap stops any persisted Tailscale daemon before setup, clones the workspace, switches apt sources from the Alibaba Cloud intranet mirror to Tsinghua mirrors, and only then starts and connects Tailscale. This preserves the Alibaba VPC connection until all intranet-dependent work finishes. Original apt files are backed up once alongside the originals with an `.orig.ephemeral-devbox` suffix. Ubuntu normal suites come from `mirrors.tuna.tsinghua.edu.cn` while security updates stay on official `security.ubuntu.com`; Debian uses Tsinghua's Debian and Debian security mirrors. It is designed to be rerun safely. As this is a single-purpose disposable host, each run resets the node's Tailscale Serve configuration before recreating the two expected routes.
 
 When Tailscale is disconnected, bootstrap uses `tailscale up --reset` before authenticating. This only clears stale local `tailscale up` flags left by a failed prior attempt; an already connected node is not re-registered.
 
@@ -187,7 +187,7 @@ sudo ./reset-local.sh
 sudo ./reset-local.sh --force
 ```
 
-It stops code-server, OpenCode Web, and the OpenCode Go relay, clears the `devbox` generated configuration and code-server user data (including installed extensions), removes `/home/devbox/.grok` (configuration and the installed Grok binary), restores original apt sources from `.orig.ephemeral-devbox` backups when present and removes generated apt sources tracked by `.created.ephemeral-devbox` markers, removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/home/devbox/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
+It stops code-server, Nginx, OpenCode Web, and the OpenCode Go relay; removes the generated code-server PWA proxy and manifest; clears the `devbox` generated configuration and code-server user data (including installed extensions); removes `/home/devbox/.grok` (configuration and the installed Grok binary); restores original apt sources from `.orig.ephemeral-devbox` backups when present and removes generated apt sources tracked by `.created.ephemeral-devbox` markers; removes the external DNS drop-in, removes Tailscale Serve rules, and deletes `/home/devbox/workspace` after confirmation (or with `--force`). It deliberately does not uninstall packages; delete Tailscale login state; alter the Tailscale account or auth key; delete SSH keys; touch remote Git repositories; call Alibaba Cloud APIs; delete ECS instances/disks; or change security groups.
 
 ## Troubleshooting
 

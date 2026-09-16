@@ -27,6 +27,7 @@ fi
 
 log 'Stopping local services...'
 systemctl disable --now code-server@devbox code-server@root 2>/dev/null || true
+systemctl disable --now nginx 2>/dev/null || true
 systemctl disable --now opencode-web 2>/dev/null || true
 systemctl disable --now opencode-go-relay 2>/dev/null || true
 
@@ -40,6 +41,9 @@ rm -rf "$DEVBOX_HOME/.config/code-server" "$DEVBOX_HOME/.local/share/code-server
 rm -f /etc/systemd/system/opencode-web.service
 rm -f /etc/systemd/system/opencode-go-relay.service
 rm -f /usr/local/bin/opencode-go-relay.mjs
+rm -f /etc/nginx/sites-enabled/code-server-pwa
+rm -f /etc/nginx/sites-available/code-server-pwa
+rm -rf /opt/code-server-pwa
 rm -f /etc/systemd/resolved.conf.d/90-ephemeral-devbox-external.conf
 log 'Restoring original apt sources...'
 restored=false

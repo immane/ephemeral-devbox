@@ -1,0 +1,47 @@
+server {
+    listen 127.0.0.1:8081;
+    server_name _;
+
+    location = /manifest.webmanifest {
+        alias /opt/code-server-pwa/manifest.webmanifest;
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache";
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        # Receive uncompressed HTML so sub_filter can inject the PWA metadata.
+        proxy_set_header Accept-Encoding "";
+
+        sub_filter_types text/html;
+        sub_filter_once on;
+        sub_filter '</head>' '
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<style>
+html, body {
+    background: #000 !important;
+    -webkit-touch-callout: none;
+    overscroll-behavior: none;
+}
+</style>
+</head>';
+        # iPadOS 27 suppresses the Web App status-bar gradient while a full
+        # viewport fixed layer is composited (as code-server dialogs do).
+        sub_filter '</body>' '<div aria-hidden="true" style="position:fixed;inset:0;z-index:2575;pointer-events:none;background:rgb(0 0 0 / 0.01)"></div></body>';
+    }
+}
